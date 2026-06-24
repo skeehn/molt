@@ -92,15 +92,22 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
     let currentToolInput = '';
     let hasToolUse = false;
     let textBuffer = '';
+    let spinnerStopped = false;
 
     try {
       for await (const event of provider.stream(messages, system, TOOLS)) {
         if (event.type === 'text_delta') {
-          spin.stop();
+          if (!spinnerStopped) {
+            renderer.stopSpinner();
+            spinnerStopped = true;
+          }
           renderer.streamText(event.text);
           textBuffer += event.text;
         } else if (event.type === 'tool_use_start') {
-          spin.stop();
+          if (!spinnerStopped) {
+            renderer.stopSpinner();
+            spinnerStopped = true;
+          }
           hasToolUse = true;
           currentToolId = event.id;
           currentToolName = event.name;
@@ -133,18 +140,25 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
             textBuffer = '';
           }
         } else if (event.type === 'error') {
-          spin.stop();
+          if (!spinnerStopped) {
+            renderer.stopSpinner();
+            spinnerStopped = true;
+          }
           renderer.error(event.error);
           return;
         }
       }
     } catch (err: any) {
-      spin.stop();
+      if (!spinnerStopped) {
+        renderer.stopSpinner();
+      }
       renderer.error(`Provider error: ${err.message}`);
       return;
     }
 
-    renderer.stopSpinner();
+    if (!spinnerStopped) {
+      renderer.stopSpinner();
+    }
     renderer.newLine();
 
     // Flush any remaining text
