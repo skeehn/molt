@@ -8,7 +8,7 @@ import { engramTool, executeEngram } from './engram.js';
 import { delegateTool, executeDelegate } from './delegate.js';
 import { finishTool, executeFinish } from './finish.js';
 import { workspaceScanTool, executeWorkspaceScan } from './workspace.js';
-import { syntaxCheckTool, executeSyntaxCheck } from './syntax.js';
+// import { syntaxCheckTool, executeSyntaxCheck } from './syntax.js'; // Disabled: needs tree-sitter native bindings
 import { semanticSearchTool, executeSemanticSearch } from './semantic-search.js';
 
 export const TOOLS: Tool[] = [
@@ -19,7 +19,7 @@ export const TOOLS: Tool[] = [
   grepTool,
   engramTool,
   workspaceScanTool,
-  syntaxCheckTool,
+  // syntaxCheckTool, // Requires tree-sitter native bindings
   semanticSearchTool,
   delegateTool,
   finishTool,
@@ -33,7 +33,7 @@ const executors: Record<string, (input: any) => Promise<ToolResult>> = {
   grep: executeGrep,
   engram: executeEngram,
   workspace_scan: executeWorkspaceScan,
-  syntax_check: executeSyntaxCheck,
+  // syntax_check: executeSyntaxCheck, // Disabled
   semantic_search: executeSemanticSearch,
   delegate: executeDelegate,
   finish: executeFinish,
