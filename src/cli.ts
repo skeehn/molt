@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { agentLoop } from './agent/loop.js';
+import { orchestrate } from './agent/orchestrator.js';
 import { loadConfig, saveConfig } from './config.js';
 import * as renderer from './tui/renderer.js';
 
 interface ParsedArgs {
   prompt?: string;
-  resume: boolean;
+  autoApprove: boolean;
   model?: string;
   provider?: string;
   command?: string;
@@ -14,7 +14,7 @@ interface ParsedArgs {
 
 function parseArgs(argv: string[]): ParsedArgs {
   const args = argv.slice(2); // skip bun/node and script path
-  const result: ParsedArgs = { resume: false };
+  const result: ParsedArgs = { autoApprove: false };
 
   let i = 0;
   while (i < args.length) {
@@ -22,8 +22,8 @@ function parseArgs(argv: string[]): ParsedArgs {
 
     if (arg === '-p' || arg === '--prompt') {
       result.prompt = args[++i];
-    } else if (arg === '--resume') {
-      result.resume = true;
+    } else if (arg === '-y' || arg === '--yes' || arg === '--auto-approve') {
+      result.autoApprove = true;
     } else if (arg === '--model') {
       result.model = args[++i];
     } else if (arg === '--provider') {
@@ -77,12 +77,11 @@ async function main(): Promise<void> {
   }
 
   try {
-    await agentLoop({
+    await orchestrate({
       prompt: parsed.prompt,
-      resume: parsed.resume,
+      autoApprove: parsed.autoApprove,
       model: parsed.model,
       provider: parsed.provider,
-      oneShot: !!parsed.prompt,
     });
   } catch (err: any) {
     if (err.message === 'SIGINT') {

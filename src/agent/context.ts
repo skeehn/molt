@@ -69,13 +69,15 @@ export async function engramRetrieve(query: string): Promise<string> {
   });
 }
 
-export async function engramStore(fact: string): Promise<void> {
+export async function engramStore(fact: string, tags: string[] = ['molt-auto']): Promise<void> {
   const engramBin = join(homedir(), 'bin', 'engram');
   const config = loadConfig();
   const dbPath = config.engram_db.replace('~', homedir());
 
+  const tagArgs = tags.flatMap(t => ['--tags', t]);
+
   return new Promise((resolve) => {
-    const proc = spawn(engramBin, ['-d', dbPath, 'add', fact, '--tags', 'molt-auto'], {
+    const proc = spawn(engramBin, ['-d', dbPath, 'add', fact, ...tagArgs], {
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 5000,
     });
