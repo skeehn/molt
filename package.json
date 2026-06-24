@@ -1,0 +1,24 @@
+{
+  "name": "molt",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "molt": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "bun build src/cli.ts --outdir dist --target node",
+    "dev": "bun run src/cli.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "latest",
+    "@anthropic-ai/sdk": "latest",
+    "chalk": "latest",
+    "ora": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "bun-types": "latest",
+    "typescript": "latest"
+  }
+}
