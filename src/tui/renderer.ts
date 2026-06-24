@@ -67,24 +67,35 @@ export function stopSpinner(): void {
 
 export function userPrompt(): Promise<string> {
   return new Promise((resolve, reject) => {
+    // Force stdin to stay open
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(false);
+    }
+    
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
-      terminal: true,
+      terminal: process.stdin.isTTY,
     });
+
+    let answered = false;
 
     rl.question(chalk.bold.green('\n❯ '), (answer) => {
+      answered = true;
       rl.close();
       resolve(answer);
-    });
-
-    rl.on('close', () => {
-      resolve('');
     });
 
     rl.on('SIGINT', () => {
       rl.close();
       reject(new Error('SIGINT'));
+    });
+
+    // Don't resolve empty on close unless we got an answer
+    rl.on('close', () => {
+      if (!answered) {
+        resolve('');
+      }
     });
   });
 }

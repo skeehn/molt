@@ -48,7 +48,10 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
   } else if (messages.length === 0) {
     // Interactive: get first prompt
     const input = await renderer.userPrompt();
-    if (!input.trim()) return;
+    if (!input.trim()) {
+      // Empty input, ask again instead of exiting
+      continue;
+    }
     messages.push({ role: 'user', content: [{ type: 'text', text: input }] });
     addMessage(sessionId, 'user', [{ type: 'text', text: input }]);
   }
@@ -224,7 +227,11 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
     if (opts.oneShot) return;
 
     const userInput = await renderer.userPrompt();
-    if (!userInput.trim()) return;
+    if (!userInput.trim()) {
+      // Empty input in interactive mode - exit gracefully
+      renderer.info('Goodbye!');
+      return;
+    }
 
     messages.push({ role: 'user', content: [{ type: 'text', text: userInput }] });
     addMessage(sessionId, 'user', [{ type: 'text', text: userInput }]);
