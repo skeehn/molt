@@ -8,6 +8,8 @@ export function streamText(text: string): void {
   if (currentSpinner) {
     currentSpinner.stop();
     currentSpinner = null;
+    // Clear the spinner line completely
+    process.stdout.write('\r\x1b[K');
   }
   process.stdout.write(chalk.cyan(text));
 }
@@ -16,6 +18,8 @@ export function toolStart(name: string, input: any): void {
   if (currentSpinner) {
     currentSpinner.stop();
     currentSpinner = null;
+    // Clear the spinner line completely
+    process.stdout.write('\r\x1b[K');
   }
   const summary = summarizeInput(name, input);
   process.stdout.write('\n' + chalk.dim(`⚡ ${name}: ${summary}`) + '\n');
@@ -62,6 +66,8 @@ export function stopSpinner(): void {
   if (currentSpinner) {
     currentSpinner.stop();
     currentSpinner = null;
+    // Clear the spinner line completely
+    process.stdout.write('\r\x1b[K');
   }
 }
 
