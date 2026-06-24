@@ -14,6 +14,11 @@ export function streamText(text: string): void {
   process.stdout.write(chalk.cyan(text));
 }
 
+// Alias for streamText
+export function stream(text: string): void {
+  streamText(text);
+}
+
 export function toolStart(name: string, input: any): void {
   if (currentSpinner) {
     currentSpinner.stop();
@@ -23,6 +28,11 @@ export function toolStart(name: string, input: any): void {
   }
   const summary = summarizeInput(name, input);
   process.stdout.write('\n' + chalk.dim(`⚡ ${name}: ${summary}`) + '\n');
+}
+
+// Alias for toolStart
+export function tool(name: string, input: any): void {
+  toolStart(name, input);
 }
 
 export function toolResult(output: string, isError?: boolean): void {
@@ -38,8 +48,26 @@ export function toolResult(output: string, isError?: boolean): void {
   process.stdout.write(color(indented) + '\n');
 }
 
-export function newLine(): void {
-  process.stdout.write('\n');
+// Alias for toolResult
+export function result(output: string | any, isError?: boolean): void {
+  // Ensure output is a string
+  if (typeof output !== 'string') {
+    output = JSON.stringify(output, null, 2);
+  }
+  toolResult(output, isError);
+}
+
+// Success message
+export function success(msg: string): void {
+  process.stdout.write(chalk.green(msg) + '\n');
+}
+
+export function newLine() {
+  console.log();
+}
+
+export function clearLine() {
+  process.stdout.write('\r\x1b[K');
 }
 
 export function warn(msg: string): void {
@@ -71,7 +99,7 @@ export function stopSpinner(): void {
   }
 }
 
-export function userPrompt(): Promise<string> {
+export function userPrompt(promptText?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     // Force stdin to stay open
     if (process.stdin.isTTY) {
@@ -86,7 +114,9 @@ export function userPrompt(): Promise<string> {
 
     let answered = false;
 
-    rl.question(chalk.bold.green('\n❯ '), (answer) => {
+    const question = promptText || chalk.bold.green('\n❯ ');
+    
+    rl.question(question, (answer: string) => {
       answered = true;
       rl.close();
       resolve(answer);

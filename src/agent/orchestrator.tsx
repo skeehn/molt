@@ -1,4 +1,4 @@
-// Simplified orchestrator - start with working version, then enhance
+// Hybrid orchestrator - use Ink if TTY available, else fallback to simple renderer
 import { agentLoop } from './loop.js';
 
 export interface OrchestratorOpts {
@@ -9,8 +9,8 @@ export interface OrchestratorOpts {
 }
 
 export async function orchestrate(opts: OrchestratorOpts): Promise<void> {
-  // For now, just use the old loop but plan to migrate to Ink later
-  // This keeps molt working while we build out the new features
+  // For Phase 1, use the existing loop but enhance it
+  // Ink TUI will come in Phase 1B after we verify basic functionality
   
   await agentLoop({
     prompt: opts.prompt,

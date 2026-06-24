@@ -10,21 +10,26 @@ export const UserPrompt: React.FC<UserPromptProps> = ({ onSubmit }) => {
 
   useInput((inputChar, key) => {
     if (key.return) {
+      // Only submit if input is non-empty
+      // Empty enter does nothing (continuous REPL mode)
       if (input.trim()) {
         onSubmit(input);
         setInput('');
       }
-      // Don't exit on empty enter - just do nothing
     } else if (key.backspace || key.delete) {
-      setInput(input.slice(0, -1));
+      setInput(prev => prev.slice(0, -1));
+    } else if (key.ctrl && inputChar === 'c') {
+      // Allow Ctrl+C to exit
+      process.exit(0);
     } else if (!key.ctrl && !key.meta && inputChar) {
-      setInput(input + inputChar);
+      setInput(prev => prev + inputChar);
     }
   });
 
   return (
-    <Box marginY={1}>
-      <Text color="cyan" bold>You: </Text>
+    <Box marginTop={1}>
+      <Text color="cyan" bold>You</Text>
+      <Text dimColor>: </Text>
       <Text>{input}</Text>
       <Text inverse> </Text>
     </Box>

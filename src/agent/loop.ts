@@ -1,4 +1,5 @@
-import type { Message, ContentBlock, StreamEvent } from '../providers/types.js';
+// Enhanced agent loop with multi-phase execution
+import type { Message, ContentBlock } from '../providers/types.js';
 import { getProvider } from '../providers/index.js';
 import { TOOLS, executeTool } from '../tools/index.js';
 import { getSystemPrompt } from '../system-prompt.js';
@@ -13,6 +14,15 @@ export interface AgentOpts {
   model?: string;
   provider?: string;
   oneShot?: boolean;
+  autoApprove?: boolean; // NEW: skip plan approval
+}
+
+interface PlanStep {
+  id: number;
+  description: string;
+  status: 'pending' | 'running' | 'complete' | 'failed';
+  tool?: string;
+  error?: string;
 }
 
 export async function agentLoop(opts: AgentOpts): Promise<void> {
@@ -23,7 +33,7 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
 
   renderer.info(`Using ${provider.name} / ${provider.model}`);
 
-  // 1. Load or create session
+  // Session management
   let sessionId: string;
   let messages: Message[] = [];
 
@@ -41,27 +51,24 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
     sessionId = createSession();
   }
 
-  // If one-shot with prompt
+  // Initial prompt
   if (opts.prompt) {
     messages.push({ role: 'user', content: [{ type: 'text', text: opts.prompt }] });
     addMessage(sessionId, 'user', [{ type: 'text', text: opts.prompt }]);
   } else if (messages.length === 0) {
-    // Interactive: get first prompt
     const input = await renderer.userPrompt();
     if (!input.trim()) {
-      renderer.info('Goodbye!');
-      return;
+      // Empty input in initial prompt - just wait, don't exit
+      renderer.info('Type a command to get started, or Ctrl+C to exit.');
+      return agentLoop(opts); // Re-prompt
     }
     messages.push({ role: 'user', content: [{ type: 'text', text: input }] });
     addMessage(sessionId, 'user', [{ type: 'text', text: input }]);
   }
 
-  // Stall detection state
-  const toolCallHistory: Array<{ name: string; args: string }> = [];
-
-  // Main loop
+  // Main execution loop
   while (true) {
-    // 2. Engram context injection
+    // === PHASE 1: UNDERSTAND ===
     let system = getSystemPrompt();
     const lastUserMsg = messages[messages.length - 1];
     if (lastUserMsg?.role === 'user') {
@@ -84,8 +91,20 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
       renderer.warn('Context compacted to fit window.');
     }
 
-    // 3. Stream LLM response
-    const spin = renderer.spinner();
+    // === PHASE 2: PLAN ===
+    const spin = renderer.spinner('Planning...');
+    let plan: PlanStep[] | null = null;
+    
+    // Ask LLM to create a plan first
+    const planningSystem = system + `\n\nBefore executing, create a brief step-by-step plan.
+Start your response with:
+PLAN:
+1. [step]
+2. [step]
+...
+
+Then proceed with execution.`;
+
     const assistantBlocks: ContentBlock[] = [];
     let currentToolId = '';
     let currentToolName = '';
@@ -93,161 +112,214 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
     let hasToolUse = false;
     let textBuffer = '';
     let spinnerStopped = false;
+    let planText = '';
 
     try {
-      for await (const event of provider.stream(messages, system, TOOLS)) {
+      for await (const event of provider.stream(messages, planningSystem, TOOLS)) {
         if (event.type === 'text_delta') {
           if (!spinnerStopped) {
-            renderer.stopSpinner();
+            spin.stop();
+            renderer.clearLine();
             spinnerStopped = true;
           }
-          renderer.streamText(event.text);
           textBuffer += event.text;
-        } else if (event.type === 'tool_use_start') {
-          if (!spinnerStopped) {
-            renderer.stopSpinner();
-            spinnerStopped = true;
+          renderer.stream(event.text);
+          
+          // Extract plan if present
+          if (textBuffer.includes('PLAN:') && !plan) {
+            planText += event.text;
           }
+        } else if (event.type === 'tool_use_start') {
           hasToolUse = true;
           currentToolId = event.id;
           currentToolName = event.name;
           currentToolInput = '';
-
-          // Flush text buffer as a block
-          if (textBuffer) {
-            assistantBlocks.push({ type: 'text', text: textBuffer });
-            textBuffer = '';
-          }
-        } else if (event.type === 'tool_use_delta') {
-          currentToolInput += event.input_json;
-        } else if (event.type === 'tool_use_end') {
-          if (currentToolName) {
-            let parsedInput: any = {};
-            try { parsedInput = JSON.parse(currentToolInput); } catch {}
-            assistantBlocks.push({
-              type: 'tool_use',
-              id: currentToolId,
-              name: currentToolName,
-              input: parsedInput,
-            });
-            renderer.toolStart(currentToolName, parsedInput);
-            currentToolName = '';
-          }
-        } else if (event.type === 'message_end') {
-          // Flush remaining text
-          if (textBuffer) {
-            assistantBlocks.push({ type: 'text', text: textBuffer });
-            textBuffer = '';
-          }
-        } else if (event.type === 'error') {
+          
+          const block: ContentBlock = {
+            type: 'tool_use',
+            id: event.id,
+            name: event.name,
+            input: {},
+          };
+          assistantBlocks.push(block);
+          
           if (!spinnerStopped) {
-            renderer.stopSpinner();
+            spin.stop();
+            renderer.clearLine();
             spinnerStopped = true;
           }
-          renderer.error(event.error);
-          return;
+          renderer.tool(event.name, {});
+        } else if (event.type === 'tool_use_delta') {
+          const block = assistantBlocks.find(b => b.type === 'tool_use' && b.id === event.id) as any;
+          if (block) {
+            block.input = { ...(block.input || {}), ...event.input };
+          }
         }
       }
-    } catch (err: any) {
+
       if (!spinnerStopped) {
-        renderer.stopSpinner();
+        spin.stop();
       }
-      renderer.error(`Provider error: ${err.message}`);
-      return;
-    }
+      renderer.newLine();
 
-    if (!spinnerStopped) {
-      renderer.stopSpinner();
-    }
-    renderer.newLine();
+      // Parse plan from text if found
+      if (planText) {
+        plan = parsePlanFromText(planText);
+        if (plan && plan.length > 0) {
+          renderer.newLine();
+          renderer.info('📋 Execution Plan:');
+          plan.forEach((step, i) => {
+            renderer.info(`  ${i + 1}. ${step.description}`);
+          });
+          renderer.newLine();
+          
+          // === PHASE 3: APPROVAL ===
+          if (!opts.autoApprove && !opts.oneShot) {
+            const approval = await renderer.userPrompt('Proceed with this plan? [Y/n] ');
+            if (approval.toLowerCase() === 'n') {
+              renderer.info('Plan rejected. What would you like to do instead?');
+              const newInput = await renderer.userPrompt();
+              if (newInput.trim()) {
+                messages.push({ role: 'user', content: [{ type: 'text', text: newInput }] });
+                addMessage(sessionId, 'user', [{ type: 'text', text: newInput }]);
+                continue; // Start over with new request
+              } else {
+                break; // Exit
+              }
+            }
+          }
+        }
+      }
 
-    // Flush any remaining text
-    if (textBuffer) {
-      assistantBlocks.push({ type: 'text', text: textBuffer });
-    }
-
-    // Save assistant message
-    if (assistantBlocks.length > 0) {
-      messages.push({ role: 'assistant', content: assistantBlocks });
-      addMessage(sessionId, 'assistant', assistantBlocks);
-    }
-
-    // 4. Execute tools
-    if (hasToolUse) {
+      // === PHASE 4: EXECUTE ===
+      // Tools were already called during streaming, now execute them
       const toolResults: ContentBlock[] = [];
-
       for (const block of assistantBlocks) {
-        if (block.type !== 'tool_use') continue;
+        if (block.type === 'tool_use') {
+          if (block.name === 'finish') {
+            const finishMsg = block.input.message || 'Task complete.';
+            renderer.success(`✓ ${finishMsg}`);
+            
+            // Store success pattern in engram
+            await engramStore(`Completed: ${lastUserMsg?.content[0]?.type === 'text' ? lastUserMsg.content[0].text : 'task'}`, ['success']);
+            
+            addMessage(sessionId, 'assistant', assistantBlocks);
+            
+            // Done with this request
+            if (opts.oneShot) {
+              return;
+            }
+            
+            // Continue interactive mode
+            renderer.newLine();
+            const nextInput = await renderer.userPrompt();
+            if (!nextInput.trim()) {
+              // Empty input - keep prompting (continuous REPL)
+              continue;
+            }
+            messages = []; // Fresh context
+            messages.push({ role: 'user', content: [{ type: 'text', text: nextInput }] });
+            addMessage(sessionId, 'user', [{ type: 'text', text: nextInput }]);
+            continue;
+          }
 
-        // 6. Stall detection
-        const callSig = JSON.stringify({ name: block.name, args: block.input });
-        toolCallHistory.push({ name: block.name, args: JSON.stringify(block.input) });
-        const recentSame = toolCallHistory.slice(-3).filter(t => t.name === block.name && t.args === JSON.stringify(block.input));
-        if (recentSame.length >= 3) {
-          renderer.warn('Stall detected: same tool called 3x with same args. Injecting nudge.');
+          const result = await executeTool(block.name, block.input);
+          renderer.result(result);
+          
           toolResults.push({
             type: 'tool_result',
             tool_use_id: block.id,
-            content: 'STALL DETECTED: You have called this tool 3 times with identical arguments. Try a different approach or use a different tool.',
-            is_error: true,
+            content: result,
           });
-          continue;
         }
-
-        // 7. Handle finish tool
-        if (block.name === 'finish') {
-          const result = await executeTool('finish', block.input);
-          renderer.toolResult(result.content);
-
-          // Auto-learn
-          if (block.input?.learnings) {
-            for (const learning of block.input.learnings) {
-              await engramStore(learning);
-            }
-          }
-
-          if (opts.oneShot) return;
-
-          // In interactive mode, continue after finish
-          renderer.info('Task marked complete.');
-          const nextInput = await renderer.userPrompt();
-          if (!nextInput.trim()) return;
-          messages.push({ role: 'user', content: [{ type: 'text', text: nextInput }] });
-          addMessage(sessionId, 'user', [{ type: 'text', text: nextInput }]);
-          continue;
-        }
-
-        // Execute the tool
-        const result = await executeTool(block.name, block.input);
-        renderer.toolResult(result.content, result.is_error);
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: block.id,
-          content: result.content,
-          is_error: result.is_error,
-        });
       }
+
+      messages.push({
+        role: 'assistant',
+        content: assistantBlocks,
+      });
 
       if (toolResults.length > 0) {
-        messages.push({ role: 'user', content: toolResults });
+        messages.push({
+          role: 'user',
+          content: toolResults,
+        });
+        addMessage(sessionId, 'assistant', assistantBlocks);
         addMessage(sessionId, 'user', toolResults);
+      } else {
+        addMessage(sessionId, 'assistant', assistantBlocks);
+        
+        if (opts.oneShot) {
+          return;
+        }
+        
+        // No tools used, agent gave a text response - continue conversation
+        renderer.newLine();
+        const nextInput = await renderer.userPrompt();
+        if (!nextInput.trim()) {
+          continue; // Empty - keep prompting
+        }
+        messages.push({ role: 'user', content: [{ type: 'text', text: nextInput }] });
+        addMessage(sessionId, 'user', [{ type: 'text', text: nextInput }]);
       }
 
-      // Continue the loop to get next LLM response
+      // === PHASE 5: VERIFY ===
+      // Simple verification: if tools succeeded and no errors, we're good
+      // More sophisticated verification can be added later
+
+    } catch (err: any) {
+      if (!spinnerStopped) {
+        spin.stop();
+      }
+      renderer.error(err.message);
+      
+      // Store error pattern
+      await engramStore(`Error: ${err.message}`, ['error', 'failure']);
+      
+      if (opts.oneShot) {
+        throw err;
+      }
+      
+      // Continue in interactive mode
+      renderer.newLine();
+      const retry = await renderer.userPrompt('Try again? ');
+      if (!retry.trim() || retry.toLowerCase() === 'n') {
+        break;
+      }
+    }
+  }
+
+  renderer.info('Goodbye!');
+}
+
+function parsePlanFromText(text: string): PlanStep[] {
+  const lines = text.split('\n');
+  const steps: PlanStep[] = [];
+  let inPlan = false;
+  let stepId = 0;
+
+  for (const line of lines) {
+    if (line.toUpperCase().includes('PLAN:')) {
+      inPlan = true;
       continue;
     }
 
-    // 5. No tool use: wait for next user input
-    if (opts.oneShot) return;
+    if (!inPlan) continue;
 
-    const userInput = await renderer.userPrompt();
-    if (!userInput.trim()) {
-      // Empty input in interactive mode - exit gracefully
-      renderer.info('Goodbye!');
-      return;
+    // Match numbered steps
+    const match = line.match(/^\s*(\d+)[\.\)]\s*(.+)$/);
+    if (match) {
+      const description = match[2].trim();
+      steps.push({
+        id: ++stepId,
+        description,
+        status: 'pending',
+      });
+    } else if (line.trim() && !line.match(/^\s*\d/)) {
+      // End of plan
+      break;
     }
-
-    messages.push({ role: 'user', content: [{ type: 'text', text: userInput }] });
-    addMessage(sessionId, 'user', [{ type: 'text', text: userInput }]);
   }
+
+  return steps;
 }
