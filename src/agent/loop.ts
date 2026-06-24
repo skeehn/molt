@@ -49,8 +49,8 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
     // Interactive: get first prompt
     const input = await renderer.userPrompt();
     if (!input.trim()) {
-      // Empty input, ask again instead of exiting
-      continue;
+      renderer.info('Goodbye!');
+      return;
     }
     messages.push({ role: 'user', content: [{ type: 'text', text: input }] });
     addMessage(sessionId, 'user', [{ type: 'text', text: input }]);
