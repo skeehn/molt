@@ -108,11 +108,14 @@ Then proceed with execution.`;
     const assistantBlocks: ContentBlock[] = [];
     let currentToolId = '';
     let currentToolName = '';
-    let currentToolInput = '';
+    let currentToolInputJson = ''; // Accumulate JSON string
     let hasToolUse = false;
     let textBuffer = '';
     let spinnerStopped = false;
     let planText = '';
+
+    // Map to track input JSON per tool ID
+    const toolInputJsonMap = new Map<string, string>();
 
     try {
       for await (const event of provider.stream(messages, planningSystem, TOOLS)) {
@@ -133,7 +136,8 @@ Then proceed with execution.`;
           hasToolUse = true;
           currentToolId = event.id;
           currentToolName = event.name;
-          currentToolInput = '';
+          currentToolInputJson = '';
+          toolInputJsonMap.set(event.id, '');
           
           const block: ContentBlock = {
             type: 'tool_use',
@@ -150,9 +154,26 @@ Then proceed with execution.`;
           }
           renderer.tool(event.name, {});
         } else if (event.type === 'tool_use_delta') {
-          const block = assistantBlocks.find(b => b.type === 'tool_use' && b.id === event.id) as any;
-          if (block) {
-            block.input = { ...(block.input || {}), ...event.input };
+          // Accumulate JSON string
+          currentToolInputJson += event.input_json;
+          
+          // Update map for the current tool
+          if (currentToolId) {
+            toolInputJsonMap.set(currentToolId, currentToolInputJson);
+          }
+        } else if (event.type === 'tool_use_end') {
+          // Parse accumulated JSON and update the block
+          const jsonStr = toolInputJsonMap.get(currentToolId) || currentToolInputJson;
+          if (jsonStr) {
+            try {
+              const parsedInput = JSON.parse(jsonStr);
+              const block = assistantBlocks.find(b => b.type === 'tool_use' && b.id === currentToolId) as any;
+              if (block) {
+                block.input = parsedInput;
+              }
+            } catch (err) {
+              renderer.warn(`Failed to parse tool input JSON: ${err}`);
+            }
           }
         }
       }
@@ -224,12 +245,19 @@ Then proceed with execution.`;
           }
 
           const result = await executeTool(block.name, block.input);
-          renderer.result(result);
+          
+          // Ensure result.content is a string
+          const resultContent = typeof result.content === 'string' 
+            ? result.content 
+            : JSON.stringify(result.content);
+          
+          renderer.result(resultContent, result.is_error);
           
           toolResults.push({
             type: 'tool_result',
             tool_use_id: block.id,
-            content: result,
+            content: resultContent,
+            is_error: result.is_error,
           });
         }
       }
@@ -246,6 +274,38 @@ Then proceed with execution.`;
         });
         addMessage(sessionId, 'assistant', assistantBlocks);
         addMessage(sessionId, 'user', toolResults);
+        
+        // === PHASE 5: VERIFY ===
+        // Simple verification: check tool results for errors
+        const hasErrors = toolResults.some(r => r.is_error);
+        if (hasErrors) {
+          renderer.warn('⚠️  Some tools reported errors');
+          // Store error in engram
+          const errorMsgs = toolResults
+            .filter(r => r.is_error)
+            .map(r => r.content)
+            .join('; ');
+          await engramStore(`Error during execution: ${errorMsgs}`, ['error', 'tool-failure']);
+        } else {
+          // === PHASE 6: REFLECT ===
+          // Store successful pattern
+          const taskDesc = lastUserMsg?.content
+            .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+            .map(b => b.text)
+            .join(' ') || 'task';
+          
+          const toolsUsed = assistantBlocks
+            .filter(b => b.type === 'tool_use')
+            .map(b => (b as any).name)
+            .join(' → ');
+          
+          await engramStore(
+            `Successfully completed: ${taskDesc}. Tools: ${toolsUsed}`,
+            ['success', 'pattern']
+          );
+          
+          renderer.success('✓ Execution verified and learned');
+        }
       } else {
         addMessage(sessionId, 'assistant', assistantBlocks);
         
