@@ -7,6 +7,9 @@ import { grepTool, executeGrep } from './grep.js';
 import { engramTool, executeEngram } from './engram.js';
 import { delegateTool, executeDelegate } from './delegate.js';
 import { finishTool, executeFinish } from './finish.js';
+import { workspaceScanTool, executeWorkspaceScan } from './workspace.js';
+import { syntaxCheckTool, executeSyntaxCheck } from './syntax.js';
+import { semanticSearchTool, executeSemanticSearch } from './semantic-search.js';
 
 export const TOOLS: Tool[] = [
   bashTool,
@@ -15,6 +18,9 @@ export const TOOLS: Tool[] = [
   patchTool,
   grepTool,
   engramTool,
+  workspaceScanTool,
+  syntaxCheckTool,
+  semanticSearchTool,
   delegateTool,
   finishTool,
 ];
@@ -26,6 +32,9 @@ const executors: Record<string, (input: any) => Promise<ToolResult>> = {
   patch: executePatch,
   grep: executeGrep,
   engram: executeEngram,
+  workspace_scan: executeWorkspaceScan,
+  syntax_check: executeSyntaxCheck,
+  semantic_search: executeSemanticSearch,
   delegate: executeDelegate,
   finish: executeFinish,
 };
