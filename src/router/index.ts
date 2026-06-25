@@ -27,7 +27,7 @@ export const MODEL_CONFIGS: Record<string, ModelConfig> = {
   },
   'sonnet-3.5': {
     provider: 'bedrock',
-    model: 'us.anthropic.claude-3-5-sonnet-20241022-v2:0',
+    model: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',  // Using Sonnet 4 (3.5 deprecated)
     inputCostPer1M: 3.00,
     outputCostPer1M: 15.00,
     speedRating: 8,
