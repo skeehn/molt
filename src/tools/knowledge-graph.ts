@@ -160,6 +160,39 @@ async function extractRustKnowledgeGraph(
     });
   }
   
+  // SECOND PASS: Detect trait implementations
+  for (const file of rsFiles) {
+    const content = readFileSync(file, 'utf-8');
+    const lines = content.split('\n');
+    const relPath = relative(projectPath, file);
+    
+    lines.forEach((line, idx) => {
+      const trimmed = line.trim();
+      
+      // Match: impl TraitName for StructName
+      // Match: impl<T> TraitName for StructName<T>
+      const traitImplRegex = /^impl(?:<[^>]+>)?\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+for\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
+      
+      const implMatch = trimmed.match(traitImplRegex);
+      if (implMatch) {
+        const traitName = implMatch[1];
+        const structName = implMatch[2];
+        
+        // Find the entities
+        const structEntity = entities.find(e => e.name === structName);
+        const traitEntity = entities.find(e => e.name === traitName);
+        
+        if (structEntity && traitEntity) {
+          relationships.push({
+            from: structEntity.id,
+            to: traitEntity.id,
+            type: 'implements',
+          });
+        }
+      }
+    });
+  }
+  
   // Extract module structure from Cargo.toml
   const cargoPath = join(projectPath, 'Cargo.toml');
   if (existsSync(cargoPath)) {
@@ -398,6 +431,61 @@ async function extractTypeScriptKnowledgeGraph(
             existingRelationship.weight = (existingRelationship.weight || 1) + 1;
           }
         }
+      }
+    });
+  }
+  
+  // THIRD PASS: Detect class inheritance and interface implementations
+  for (const file of tsFiles) {
+    const content = readFileSync(file, 'utf-8');
+    const lines = content.split('\n');
+    const relPath = relative(projectPath, file);
+    
+    lines.forEach((line, idx) => {
+      const trimmed = line.trim();
+      
+      // Match: class X extends Y
+      // Match: class X extends Y implements I1, I2
+      // Match: class X implements I1, I2
+      const classExtendsRegex = /export\s+class\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+extends\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
+      const classImplementsRegex = /export\s+class\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+(?:extends\s+[a-zA-Z_][a-zA-Z0-9_]*\s+)?implements\s+([a-zA-Z_][a-zA-Z0-9_,\s]+)/;
+      
+      const extendsMatch = trimmed.match(classExtendsRegex);
+      if (extendsMatch) {
+        const className = extendsMatch[1];
+        const parentName = extendsMatch[2];
+        
+        // Find the entities
+        const classEntity = entities.find(e => e.name === className && e.file === relPath);
+        const parentEntity = entities.find(e => e.name === parentName);
+        
+        if (classEntity && parentEntity) {
+          relationships.push({
+            from: classEntity.id,
+            to: parentEntity.id,
+            type: 'extends',
+          });
+        }
+      }
+      
+      const implementsMatch = trimmed.match(classImplementsRegex);
+      if (implementsMatch) {
+        const className = implementsMatch[1];
+        const interfaces = implementsMatch[2].split(',').map(i => i.trim());
+        
+        const classEntity = entities.find(e => e.name === className && e.file === relPath);
+        
+        interfaces.forEach(interfaceName => {
+          const interfaceEntity = entities.find(e => e.name === interfaceName);
+          
+          if (classEntity && interfaceEntity) {
+            relationships.push({
+              from: classEntity.id,
+              to: interfaceEntity.id,
+              type: 'implements',
+            });
+          }
+        });
       }
     });
   }
