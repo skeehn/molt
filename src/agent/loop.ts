@@ -17,6 +17,7 @@ export interface AgentOpts {
   provider?: string;
   oneShot?: boolean;
   autoApprove?: boolean; // NEW: skip plan approval
+  concise?: boolean; // NEW: enable concise mode
 }
 
 interface PlanStep {
@@ -88,7 +89,7 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
   // Main execution loop
   while (true) {
     // === PHASE 1: UNDERSTAND ===
-    let system = getSystemPrompt();
+    let system = getSystemPrompt(opts.concise);
     
     // Inject session context into system prompt
     const contextSummary = getContextSummary();

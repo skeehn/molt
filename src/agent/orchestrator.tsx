@@ -4,6 +4,7 @@ import { agentLoop } from './loop.js';
 export interface OrchestratorOpts {
   prompt?: string;
   autoApprove?: boolean;
+  concise?: boolean;
   model?: string;
   provider?: string;
 }
@@ -18,5 +19,7 @@ export async function orchestrate(opts: OrchestratorOpts): Promise<void> {
     model: opts.model,
     provider: opts.provider,
     oneShot: !!opts.prompt,
+    autoApprove: opts.autoApprove,
+    concise: opts.concise,
   });
 }

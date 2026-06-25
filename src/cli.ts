@@ -6,6 +6,7 @@ import * as renderer from './tui/renderer.js';
 interface ParsedArgs {
   prompt?: string;
   autoApprove: boolean;
+  concise: boolean;
   model?: string;
   provider?: string;
   command?: string;
@@ -14,7 +15,7 @@ interface ParsedArgs {
 
 function parseArgs(argv: string[]): ParsedArgs {
   const args = argv.slice(2); // skip bun/node and script path
-  const result: ParsedArgs = { autoApprove: false };
+  const result: ParsedArgs = { autoApprove: false, concise: false };
 
   let i = 0;
   while (i < args.length) {
@@ -24,6 +25,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       result.prompt = args[++i];
     } else if (arg === '-y' || arg === '--yes' || arg === '--auto-approve') {
       result.autoApprove = true;
+    } else if (arg === '--concise' || arg === '-c') {
+      result.concise = true;
     } else if (arg === '--model') {
       result.model = args[++i];
     } else if (arg === '--provider') {
@@ -80,6 +83,7 @@ async function main(): Promise<void> {
     await orchestrate({
       prompt: parsed.prompt,
       autoApprove: parsed.autoApprove,
+      concise: parsed.concise,
       model: parsed.model,
       provider: parsed.provider,
     });
