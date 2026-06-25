@@ -10,6 +10,8 @@ import { createSession, addMessage, getMessages, getLastSession } from '../sessi
 import { needsCompaction, compact, engramRetrieve, engramStore } from './context.js';
 import * as renderer from '../tui/renderer.js';
 import { parsePlanFromText, type PlanStep } from './loop/plan-parser.js';
+import { getSkillManager } from '../skills/manager.js';
+import type { SkillMatch } from '../skills/types.js';
 
 export interface AgentOpts {
   prompt?: string;
@@ -23,6 +25,10 @@ export interface AgentOpts {
 
 export async function agentLoop(opts: AgentOpts): Promise<void> {
   const config = loadConfig();
+  
+  // Initialize skills manager
+  const skillManager = getSkillManager();
+  await skillManager.initialize();
   
   // Smart model routing based on task complexity
   let providerName = opts.provider || config.provider;
@@ -91,6 +97,8 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
     }
     
     const lastUserMsg = messages[messages.length - 1];
+    let matchedSkills: SkillMatch[] = [];
+    
     if (lastUserMsg?.role === 'user') {
       const userText = lastUserMsg.content
         .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
@@ -98,6 +106,30 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
         .join(' ');
 
       if (userText) {
+        // Check for matching skills
+        matchedSkills = await skillManager.matchSkills(userText, 0.6);
+        
+        // Inject matched skills into system prompt
+        if (matchedSkills.length > 0) {
+          system += `\n\n## Relevant Skills\n`;
+          system += `The following learned skills may be relevant to this task:\n\n`;
+          
+          for (const match of matchedSkills.slice(0, 3)) { // Top 3 matches
+            system += `### ${match.skill.name} (confidence: ${(match.confidence * 100).toFixed(0)}%)\n`;
+            system += `${match.skill.description}\n\n`;
+            system += `**Approach:**\n${match.skill.approach}\n\n`;
+            
+            if (match.skill.code && match.skill.code.length > 0) {
+              system += `**Code patterns:**\n\`\`\`\n${match.skill.code.join('\n')}\n\`\`\`\n\n`;
+            }
+            
+            if (match.skill.examples.length > 0) {
+              const latestExample = match.skill.examples[match.skill.examples.length - 1];
+              system += `**Example:**\n- Problem: ${latestExample.problem}\n- Outcome: ${latestExample.outcome}\n\n`;
+            }
+          }
+        }
+        
         const engramContext = await engramRetrieve(userText);
         if (engramContext.trim()) {
           system += `\n\nRelevant context from memory:\n${engramContext}`;
@@ -109,6 +141,15 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
     if (needsCompaction(messages)) {
       messages = compact(messages);
       renderer.warn('Context compacted to fit window.');
+    }
+
+    // Display matched skills to user
+    if (matchedSkills.length > 0) {
+      renderer.info(`💡 Found ${matchedSkills.length} relevant skill${matchedSkills.length > 1 ? 's' : ''}:`);
+      matchedSkills.slice(0, 3).forEach(match => {
+        renderer.info(`   - ${match.skill.name} (${(match.confidence * 100).toFixed(0)}% match)`);
+      });
+      renderer.newLine();
     }
 
     // === PHASE 2: PLAN ===
@@ -330,7 +371,22 @@ Then proceed with execution.`;
             ['success', 'pattern']
           );
           
-          renderer.success('✓ Execution verified and learned');
+          // Record skill usage if skills were matched
+          if (matchedSkills.length > 0) {
+            const topSkill = matchedSkills[0];
+            await skillManager.recordExecution(
+              topSkill.skill.id,
+              true,
+              {
+                problem: taskDesc,
+                execution: toolsUsed,
+                outcome: 'Successfully completed task using learned pattern',
+              }
+            );
+            renderer.success(`✓ Execution verified and learned (skill: ${topSkill.skill.name})`);
+          } else {
+            renderer.success('✓ Execution verified and learned');
+          }
         }
       } else {
         addMessage(sessionId, 'assistant', assistantBlocks);
