@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { homedir } from 'os';
 import { join } from 'path';
+import { existsSync } from 'fs';
 import type { ToolResult } from '../providers/types.js';
 
 export const engramTool = {
@@ -21,7 +22,37 @@ export const engramTool = {
 const ENGRAM_BIN = join(homedir(), 'bin', 'engram');
 const ENGRAM_DB = join(homedir(), '.engram', 'knowledge');
 
+let engramWarningShown = false;
+
+function checkEngramAvailable(): boolean {
+  return existsSync(ENGRAM_BIN);
+}
+
+function showEngramWarning(): string {
+  if (!engramWarningShown) {
+    engramWarningShown = true;
+    return '⚠️  engram not found, knowledge persistence disabled. Install: https://github.com/skeehn/engram\n\n';
+  }
+  return '';
+}
+
 export async function executeEngram(input: { action: string; query?: string; body?: string; tags?: string[] }): Promise<ToolResult> {
+  // Check if engram is available
+  if (!checkEngramAvailable()) {
+    const warning = showEngramWarning();
+    // Return empty results instead of failing
+    switch (input.action) {
+      case 'search':
+        return { content: warning + 'No results (engram not installed)' };
+      case 'add':
+        return { content: warning + 'Knowledge not persisted (engram not installed)' };
+      case 'get':
+        return { content: warning + 'Entry not found (engram not installed)' };
+      default:
+        return { content: warning + 'engram not available' };
+    }
+  }
+
   let args: string[] = [];
 
   // -d must come BEFORE the subcommand
