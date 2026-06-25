@@ -122,38 +122,41 @@ async function handleInit(): Promise<void> {
 
   // Detect available providers
   console.log('Detecting available providers...\n');
-  const available: string[] = [];
+  const available: Array<{name: string, display: string}> = [];
   
   if (checkEnvVar('AWS_REGION')) {
-    available.push('bedrock (AWS_REGION detected)');
+    available.push({name: 'bedrock', display: 'bedrock (AWS_REGION detected)'});
   }
   if (checkEnvVar('ANTHROPIC_API_KEY')) {
-    available.push('anthropic (ANTHROPIC_API_KEY detected)');
+    available.push({name: 'anthropic', display: 'anthropic (ANTHROPIC_API_KEY detected)'});
   }
   if (checkEnvVar('OPENROUTER_API_KEY')) {
-    available.push('openrouter (OPENROUTER_API_KEY detected)');
+    available.push({name: 'openrouter', display: 'openrouter (OPENROUTER_API_KEY detected)'});
   }
-  available.push('ollama (local, no API key needed)');
+  available.push({name: 'ollama', display: 'ollama (local, no API key needed)'});
 
   console.log('Available providers:');
-  available.forEach((p, i) => console.log(`  ${i + 1}. ${p}`));
+  available.forEach((p, i) => console.log(`  ${i + 1}. ${p.display}`));
   console.log();
 
   const choice = await ask('Select provider (1-4, or name): ');
   
   let provider = '';
-  if (choice === '1' || choice.toLowerCase().startsWith('bed')) {
+  const choiceNum = parseInt(choice, 10);
+  if (!isNaN(choiceNum) && choiceNum >= 1 && choiceNum <= available.length) {
+    provider = available[choiceNum - 1].name;
+  } else if (choice.toLowerCase().startsWith('bed')) {
     provider = 'bedrock';
-  } else if (choice === '2' || choice.toLowerCase().startsWith('ant')) {
+  } else if (choice.toLowerCase().startsWith('ant')) {
     provider = 'anthropic';
-  } else if (choice === '3' || choice.toLowerCase().startsWith('open')) {
+  } else if (choice.toLowerCase().startsWith('open')) {
     provider = 'openrouter';
-  } else if (choice === '4' || choice.toLowerCase().startsWith('olla')) {
+  } else if (choice.toLowerCase().startsWith('olla')) {
     provider = 'ollama';
   } else {
     console.log(`\nUnknown provider: ${choice}`);
-    console.log('Using default: bedrock\n');
-    provider = 'bedrock';
+    console.log(`Using default: ${available[0].name}\n`);
+    provider = available[0].name;
   }
 
   // Create config
