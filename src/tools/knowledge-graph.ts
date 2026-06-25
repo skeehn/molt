@@ -563,6 +563,113 @@ function findFiles(dir: string, ...exts: string[]): string[] {
   return results;
 }
 
+// Generate Mermaid diagram from knowledge graph
+export function generateMermaidDiagram(graph: KnowledgeGraph, orientation: 'LR' | 'TD' = 'TD'): string {
+  let output = '```mermaid\n';
+  output += `flowchart ${orientation}\n`;
+  
+  // Define color scheme based on entity type
+  const getNodeStyle = (entity: Entity): string => {
+    switch (entity.type) {
+      case 'function':
+        return ':::functionStyle';
+      case 'class':
+        return ':::classStyle';
+      case 'type':
+      case 'struct':
+      case 'enum':
+        return ':::typeStyle';
+      default:
+        return '';
+    }
+  };
+  
+  // Sanitize node IDs for Mermaid (remove special chars, spaces)
+  const sanitizeId = (id: string): string => {
+    return id.replace(/[^a-zA-Z0-9_]/g, '_');
+  };
+  
+  // Group entities by module
+  const entitiesByModule = new Map<string, Entity[]>();
+  graph.entities.forEach(entity => {
+    // Extract module from file path (e.g., "src/agent/loop.ts" -> "agent")
+    const parts = entity.file.split('/');
+    const module = parts.length > 1 ? parts[parts.length - 2] : 'root';
+    
+    if (!entitiesByModule.has(module)) {
+      entitiesByModule.set(module, []);
+    }
+    entitiesByModule.get(module)!.push(entity);
+  });
+  
+  // Generate subgraphs for each module
+  let subgraphIndex = 0;
+  entitiesByModule.forEach((entities, moduleName) => {
+    const sanitizedModuleName = sanitizeId(moduleName);
+    output += `\n  subgraph ${sanitizedModuleName}["${moduleName}"]\n`;
+    
+    // Add nodes for entities in this module
+    entities.forEach(entity => {
+      const nodeId = sanitizeId(entity.id);
+      const label = entity.name;
+      const style = getNodeStyle(entity);
+      output += `    ${nodeId}["${label}"]${style}\n`;
+    });
+    
+    output += `  end\n`;
+    subgraphIndex++;
+  });
+  
+  // Add relationships as edges
+  output += '\n';
+  graph.relationships.forEach(rel => {
+    const fromId = sanitizeId(rel.from);
+    const toId = sanitizeId(rel.to);
+    
+    // Style edges based on relationship type
+    let edgeStyle = '';
+    let label = '';
+    
+    switch (rel.type) {
+      case 'calls':
+        edgeStyle = '-->'; // solid arrow
+        label = 'calls';
+        break;
+      case 'imports':
+        edgeStyle = '-.->'; // dashed arrow
+        label = 'imports';
+        break;
+      case 'extends':
+        edgeStyle = '==>'; // thick arrow
+        label = 'extends';
+        break;
+      case 'implements':
+        edgeStyle = '==>'; // thick arrow
+        label = 'implements';
+        break;
+      case 'uses':
+        edgeStyle = '-->'; // solid arrow
+        label = 'uses';
+        break;
+      case 'contains':
+        edgeStyle = '-->'; // solid arrow
+        label = 'contains';
+        break;
+    }
+    
+    output += `  ${fromId} ${edgeStyle}|${label}| ${toId}\n`;
+  });
+  
+  // Add style definitions
+  output += '\n';
+  output += '  classDef functionStyle fill:#4A90E2,stroke:#2E5C8A,color:#fff\n';
+  output += '  classDef classStyle fill:#50C878,stroke:#2E7D4E,color:#fff\n';
+  output += '  classDef typeStyle fill:#FFD700,stroke:#B8860B,color:#000\n';
+  
+  output += '```\n';
+  return output;
+}
+
 // Generate visualization of knowledge graph
 export function visualizeKnowledgeGraph(graph: KnowledgeGraph): string {
   let output = '# Knowledge Graph\n\n';
@@ -605,6 +712,15 @@ export function visualizeKnowledgeGraph(graph: KnowledgeGraph): string {
     }
     output += '\n';
   });
+  
+  // Add Mermaid diagrams
+  output += `## Mermaid Diagram (Top-Down)\n\n`;
+  output += generateMermaidDiagram(graph, 'TD');
+  output += '\n';
+  
+  output += `## Mermaid Diagram (Left-Right)\n\n`;
+  output += generateMermaidDiagram(graph, 'LR');
+  output += '\n';
   
   return output;
 }
