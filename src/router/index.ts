@@ -41,10 +41,10 @@ export const MODEL_CONFIGS: Record<string, ModelConfig> = {
   },
   'opus': {
     provider: 'bedrock',
-    model: 'anthropic.claude-3-opus-20240229-v1:0',
-    inputCostPer1M: 15.00,
-    outputCostPer1M: 75.00,
-    speedRating: 3,
+    model: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0', // Sonnet 4 (Opus deprecated)
+    inputCostPer1M: 3.00,
+    outputCostPer1M: 15.00,
+    speedRating: 5,
   },
   'qwen-local': {
     provider: 'ollama',

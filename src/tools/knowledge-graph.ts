@@ -134,12 +134,20 @@ async function extractRustKnowledgeGraph(
         });
       }
       
-      // Extract function calls (simplified)
-      if (trimmed.includes('(') && !trimmed.startsWith('//')) {
-        const callMatch = trimmed.match(/([a-zA-Z_][a-zA-Z0-9_]*)\(/);
-        if (callMatch) {
-          // This is a very simplified call detection
-          // Real implementation would need proper parsing
+      // Extract imports
+      if (trimmed.startsWith('use ') || trimmed.startsWith('mod ')) {
+        const importMatch = trimmed.match(/use\s+(?:crate::)?([a-zA-Z_][a-zA-Z0-9_:]*)/);
+        if (importMatch) {
+          const imported = importMatch[1].split('::')[0];
+          // Find if we have this entity
+          const targetEntity = entities.find(e => e.name === imported);
+          if (targetEntity) {
+            relationships.push({
+              from: `${relPath}`,
+              to: targetEntity.id,
+              type: 'imports',
+            });
+          }
         }
       }
     });
@@ -251,6 +259,51 @@ async function extractTypeScriptKnowledgeGraph(
           line: idx + 1,
           visibility: 'public',
         });
+      }
+      
+      // Extract imports - track relationships
+      if (trimmed.startsWith('import ')) {
+        // Match: import { foo, bar } from './path'
+        // Match: import * as foo from './path'
+        // Match: import foo from './path'
+        const namedImportMatch = trimmed.match(/import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/);
+        const namespaceImportMatch = trimmed.match(/import\s+\*\s+as\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+from\s+['"]([^'"]+)['"]/);
+        const defaultImportMatch = trimmed.match(/import\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+from\s+['"]([^'"]+)['"]/);
+        
+        if (namedImportMatch) {
+          const imported = namedImportMatch[1].split(',').map(s => s.trim().replace(/\s+as\s+.*/, ''));
+          imported.forEach(name => {
+            // Find if we have this entity
+            const targetEntity = entities.find(e => e.name === name);
+            if (targetEntity) {
+              relationships.push({
+                from: relPath,
+                to: targetEntity.id,
+                type: 'imports',
+              });
+            }
+          });
+        } else if (namespaceImportMatch) {
+          const name = namespaceImportMatch[1];
+          const targetEntity = entities.find(e => e.name === name);
+          if (targetEntity) {
+            relationships.push({
+              from: relPath,
+              to: targetEntity.id,
+              type: 'imports',
+            });
+          }
+        } else if (defaultImportMatch) {
+          const name = defaultImportMatch[1];
+          const targetEntity = entities.find(e => e.name === name);
+          if (targetEntity) {
+            relationships.push({
+              from: relPath,
+              to: targetEntity.id,
+              type: 'imports',
+            });
+          }
+        }
       }
     });
   }
