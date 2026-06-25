@@ -1,6 +1,6 @@
-import { Database } from 'bun:sqlite';
+import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
 import { join } from 'path';
-import { mkdirSync, existsSync } from 'fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { randomUUID } from 'crypto';
 import type { Message } from '../providers/types.js';
@@ -8,18 +8,29 @@ import type { Message } from '../providers/types.js';
 const DB_DIR = join(homedir(), '.grain');
 const DB_PATH = join(DB_DIR, 'sessions.db');
 
-let db: Database | null = null;
+let db: SqlJsDatabase | null = null;
+let SQL: any = null;
 
-function getDb(): Database {
+async function getDb(): Promise<SqlJsDatabase> {
   if (db) return db;
+
+  if (!SQL) {
+    SQL = await initSqlJs();
+  }
 
   if (!existsSync(DB_DIR)) {
     mkdirSync(DB_DIR, { recursive: true });
   }
 
-  db = new Database(DB_PATH);
-  db.run('PRAGMA journal_mode = WAL');
+  // Load existing database or create new
+  if (existsSync(DB_PATH)) {
+    const buffer = readFileSync(DB_PATH);
+    db = new SQL.Database(buffer);
+  } else {
+    db = new SQL.Database();
+  }
 
+  // Create tables
   db.run(`
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
@@ -45,43 +56,81 @@ function getDb(): Database {
   return db;
 }
 
-export function createSession(title?: string): string {
+function saveDb() {
+  if (db) {
+    const data = db.export();
+    const buffer = Buffer.from(data);
+    writeFileSync(DB_PATH, buffer);
+  }
+}
+
+export async function createSession(title?: string): Promise<string> {
   const id = randomUUID();
-  const database = getDb();
-  database.prepare('INSERT INTO sessions (id, title) VALUES (?, ?)').run(id, title || 'Untitled');
+  const database = await getDb();
+  
+  database.run(
+    'INSERT INTO sessions (id, title) VALUES (?, ?)',
+    [id, title || null]
+  );
+  
+  saveDb();
   return id;
 }
 
-export function addMessage(sessionId: string, role: string, content: any[]): void {
-  const database = getDb();
+export async function addMessage(
+  sessionId: string,
+  role: 'user' | 'assistant',
+  content: Message['content']
+): Promise<void> {
   const id = randomUUID();
-  database.prepare('INSERT INTO messages (id, session_id, role, content_json) VALUES (?, ?, ?, ?)').run(
-    id, sessionId, role, JSON.stringify(content)
+  const database = await getDb();
+  
+  database.run(
+    'INSERT INTO messages (id, session_id, role, content_json) VALUES (?, ?, ?, ?)',
+    [id, sessionId, role, JSON.stringify(content)]
   );
-  database.prepare("UPDATE sessions SET updated_at = datetime('now') WHERE id = ?").run(sessionId);
+  
+  database.run(
+    'UPDATE sessions SET updated_at = datetime("now") WHERE id = ?',
+    [sessionId]
+  );
+  
+  saveDb();
 }
 
-export function getMessages(sessionId: string): Message[] {
-  const database = getDb();
-  const rows = database.prepare('SELECT role, content_json FROM messages WHERE session_id = ? ORDER BY created_at').all(sessionId) as any[];
-  return rows.map(row => ({
-    role: row.role as 'user' | 'assistant',
-    content: JSON.parse(row.content_json),
-  }));
+export async function getMessages(sessionId: string): Promise<Message[]> {
+  const database = await getDb();
+  
+  const stmt = database.prepare(
+    'SELECT role, content_json FROM messages WHERE session_id = ? ORDER BY created_at ASC'
+  );
+  
+  const rows: Message[] = [];
+  while (stmt.step()) {
+    const row = stmt.getAsObject();
+    rows.push({
+      role: row.role as 'user' | 'assistant',
+      content: JSON.parse(row.content_json as string),
+    });
+  }
+  
+  stmt.free();
+  return rows;
 }
 
-export function listSessions(limit = 20): Array<{ id: string; title: string; created_at: string; updated_at: string }> {
-  const database = getDb();
-  return database.prepare('SELECT id, title, created_at, updated_at FROM sessions ORDER BY updated_at DESC LIMIT ?').all(limit) as any[];
-}
-
-export function getLastSession(): { id: string; title: string } | null {
-  const database = getDb();
-  const row = database.prepare('SELECT id, title FROM sessions ORDER BY updated_at DESC LIMIT 1').get() as any;
-  return row || null;
-}
-
-export function updateSessionTitle(sessionId: string, title: string): void {
-  const database = getDb();
-  database.prepare('UPDATE sessions SET title = ? WHERE id = ?').run(title, sessionId);
+export async function getLastSession(): Promise<string | null> {
+  const database = await getDb();
+  
+  const stmt = database.prepare(
+    'SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1'
+  );
+  
+  if (stmt.step()) {
+    const row = stmt.getAsObject();
+    stmt.free();
+    return row.id as string;
+  }
+  
+  stmt.free();
+  return null;
 }

@@ -54,17 +54,17 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
   let messages: Message[] = [];
 
   if (opts.resume) {
-    const last = getLastSession();
+    const last = await getLastSession();
     if (last) {
-      sessionId = last.id;
-      messages = getMessages(sessionId);
-      renderer.info(`Resumed session: ${last.title}`);
+      sessionId = last;
+      messages = await getMessages(sessionId);
+      renderer.info('Resumed session');
     } else {
-      sessionId = createSession();
+      sessionId = await createSession();
       renderer.info('No previous session found, starting new.');
     }
   } else {
-    sessionId = createSession();
+    sessionId = await createSession();
   }
   
   // Load session context (file tracking, project info, etc.)
@@ -73,7 +73,7 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
   // Initial prompt
   if (opts.prompt) {
     messages.push({ role: 'user', content: [{ type: 'text', text: opts.prompt }] });
-    addMessage(sessionId, 'user', [{ type: 'text', text: opts.prompt }]);
+    await addMessage(sessionId, 'user', [{ type: 'text', text: opts.prompt }]);
   } else if (messages.length === 0) {
     const input = await renderer.userPrompt();
     if (!input.trim()) {
