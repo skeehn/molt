@@ -181,6 +181,7 @@ async function extractTypeScriptKnowledgeGraph(
     !f.includes('node_modules') && !f.includes('dist') && !f.includes('.d.ts')
   );
   
+  // FIRST PASS: Extract all entities
   for (const file of tsFiles) {
     const content = readFileSync(file, 'utf-8');
     const lines = content.split('\n');
@@ -302,6 +303,92 @@ async function extractTypeScriptKnowledgeGraph(
               to: targetEntity.id,
               type: 'imports',
             });
+          }
+        }
+      }
+    });
+  }
+  
+  // Build entity name lookup for fast function call matching
+  const entityByName = new Map<string, Entity[]>();
+  entities.forEach(entity => {
+    if (!entityByName.has(entity.name)) {
+      entityByName.set(entity.name, []);
+    }
+    entityByName.get(entity.name)!.push(entity);
+  });
+  
+  // SECOND PASS: Detect function calls
+  for (const file of tsFiles) {
+    const content = readFileSync(file, 'utf-8');
+    const lines = content.split('\n');
+    const relPath = relative(projectPath, file);
+    
+    let currentFunction: string | null = null;
+    let braceDepth = 0;
+    
+    lines.forEach((line, idx) => {
+      const trimmed = line.trim();
+      
+      // Track current function context
+      const fnRegex = /^export\s+(async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
+      const arrowFnRegex = /^export\s+const\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(async\s*)?\(/;
+      
+      const fnMatch = trimmed.match(fnRegex);
+      const arrowMatch = trimmed.match(arrowFnRegex);
+      
+      if (fnMatch) {
+        currentFunction = `${relPath}::${fnMatch[2]}`;
+        braceDepth = 0;
+      } else if (arrowMatch) {
+        currentFunction = `${relPath}::${arrowMatch[1]}`;
+        braceDepth = 0;
+      }
+      
+      // Track brace depth to know when we exit function
+      braceDepth += (line.match(/\{/g) || []).length;
+      braceDepth -= (line.match(/\}/g) || []).length;
+      
+      if (braceDepth <= 0 && currentFunction) {
+        currentFunction = null;
+      }
+      
+      // Find function calls: functionName(
+      // Match word characters followed by opening paren
+      const callRegex = /([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/g;
+      let match;
+      
+      while ((match = callRegex.exec(line)) !== null) {
+        const calledName = match[1];
+        
+        // Skip common keywords and control structures
+        const skipWords = ['if', 'for', 'while', 'switch', 'catch', 'function', 'return'];
+        if (skipWords.includes(calledName)) continue;
+        
+        // Check if this function exists in our entities
+        const targetEntities = entityByName.get(calledName);
+        if (targetEntities && targetEntities.length > 0) {
+          // Prefer entity from same file, otherwise take first match
+          let targetEntity = targetEntities.find(e => e.file === relPath) || targetEntities[0];
+          
+          // Determine caller context (current function or file)
+          const callerId = currentFunction || relPath;
+          
+          // Check if relationship already exists (to avoid duplicates)
+          const existingRelationship = relationships.find(
+            r => r.from === callerId && r.to === targetEntity.id && r.type === 'calls'
+          );
+          
+          if (!existingRelationship) {
+            relationships.push({
+              from: callerId,
+              to: targetEntity.id,
+              type: 'calls',
+              weight: 1,
+            });
+          } else {
+            // Increment weight for repeated calls
+            existingRelationship.weight = (existingRelationship.weight || 1) + 1;
           }
         }
       }
