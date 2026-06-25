@@ -69,7 +69,7 @@ export async function engramRetrieve(query: string): Promise<string> {
   });
 }
 
-export async function engramStore(fact: string, tags: string[] = ['molt-auto']): Promise<void> {
+export async function engramStore(fact: string, tags: string[] = ['grain-auto']): Promise<void> {
   const engramBin = join(homedir(), 'bin', 'engram');
   const config = loadConfig();
   const dbPath = config.engram_db.replace('~', homedir());

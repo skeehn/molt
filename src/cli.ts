@@ -67,7 +67,7 @@ function handleConfig(configArgs: string[]): void {
       renderer.error(`Unknown config key: ${key}`);
     }
   } else {
-    renderer.error('Usage: molt config [key value]');
+    renderer.error('Usage: grain config [key value]');
   }
 }
 

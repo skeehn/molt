@@ -54,7 +54,7 @@ class ContextTracker {
   private session: SessionContext;
   
   constructor() {
-    const baseDir = join(homedir(), '.molt');
+    const baseDir = join(homedir(), '.grain', 'context');
     this.sessionPath = join(baseDir, 'session');
     this.cachePath = join(baseDir, 'cache');
     

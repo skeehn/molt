@@ -5,7 +5,7 @@ import { homedir } from 'os';
 import { randomUUID } from 'crypto';
 import type { Message } from '../providers/types.js';
 
-const DB_DIR = join(homedir(), '.molt');
+const DB_DIR = join(homedir(), '.grain');
 const DB_PATH = join(DB_DIR, 'sessions.db');
 
 let db: Database | null = null;

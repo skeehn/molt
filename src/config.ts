@@ -9,7 +9,7 @@ export interface MoltConfig {
   max_tokens: number;
 }
 
-const CONFIG_DIR = join(homedir(), '.molt');
+const CONFIG_DIR = join(homedir(), '.grain');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
 
 const DEFAULTS: MoltConfig = {

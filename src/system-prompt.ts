@@ -6,7 +6,7 @@ export function getSystemPrompt(concise = false): string {
   const shell = process.env.SHELL || '/bin/bash';
 
   if (concise) {
-    return `You are molt, a coding agent. You have access to tools for reading, writing, and executing code.
+    return `You are grain, a coding agent. You have access to tools for reading, writing, and executing code.
 
 Rules:
 - Always read files before editing them
@@ -24,7 +24,7 @@ Shell: ${shell}
 Be terse and action-oriented. Skip verbose explanations. Show brief PLAN, then execute immediately.`;
   }
 
-  return `You are molt, a coding agent. You have access to tools for reading, writing, and executing code.
+  return `You are grain, a coding agent. You have access to tools for reading, writing, and executing code.
 
 Rules:
 - Always read files before editing them

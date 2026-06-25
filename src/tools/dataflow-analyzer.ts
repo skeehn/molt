@@ -157,9 +157,9 @@ function extractTypeScriptDataFlow(projectPath: string): DataFlowGraph {
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
   const projectName = pkg.name || 'project';
   
-  // Check if this is molt
-  if (projectName === 'molt' || projectPath.includes('molt')) {
-    // molt architecture
+  // Check if this is grain
+  if (projectName === 'grain' || projectPath.includes('grain')) {
+    // grain architecture
     nodes.push(
       { id: 'cli', name: 'CLI', type: 'module', file: 'src/cli.ts' },
       { id: 'loop', name: 'Agent Loop', type: 'module', file: 'src/agent/loop.ts' },

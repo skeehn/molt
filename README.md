@@ -1,4 +1,4 @@
-# molt
+# grain
 
 TypeScript coding agent with streaming TUI, multi-provider LLM support, and engram knowledge integration.
 
@@ -19,18 +19,18 @@ TypeScript coding agent with streaming TUI, multi-provider LLM support, and engr
 bun install
 
 # Run
-molt -p "Create a TypeScript function"
+grain -p "Create a TypeScript function"
 
 # Or interactive mode
-molt
+grain
 ```
 
 ## Architecture
 
 Built in TypeScript with Bun runtime. Streaming agent loop with tool execution, engram context injection, and session persistence.
 
-Location: ~/molt
-Binary: ~/bin/molt
+Location: ~/grain
+Binary: ~/bin/grain
 
 ## License
 

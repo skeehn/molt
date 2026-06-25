@@ -1,31 +1,31 @@
-# molt - TypeScript Coding Agent
+# grain - TypeScript Coding Agent
 
 ## Architecture
 
 TypeScript + Bun runtime. Streaming agent loop with tool execution, engram context injection, and SQLite session persistence.
 
-Location: ~/molt/
-Binary: ~/bin/molt (wrapper: bun run ~/molt/src/cli.ts)
-Config: ~/.molt/config.json
-Sessions: ~/.molt/sessions.db (bun:sqlite)
+Location: ~/grain/
+Binary: ~/bin/grain (wrapper: bun run ~/grain/src/cli.ts)
+Config: ~/.grain/config.json
+Sessions: ~/.grain/sessions.db (bun:sqlite)
 
 ## Key Commands
 
 ```bash
 # One-shot task
-molt -p "task description"
+grain -p "task description"
 
 # Interactive REPL
-molt
+grain
 
 # Resume last session
-molt --resume
+grain --resume
 
 # Override provider
-molt --provider ollama --model qwen3:32b
+grain --provider ollama --model qwen3:32b
 
 # Show config
-molt config
+grain config
 ```
 
 ## Source Structure
@@ -64,7 +64,7 @@ Auth: AWS profile/env for Bedrock, ANTHROPIC_API_KEY for direct, etc.
 
 ## engram Integration
 
-Config in ~/.molt/config.json:
+Config in ~/.grain/config.json:
 ```json
 {
   "provider": "bedrock",
@@ -108,8 +108,8 @@ Before each LLM call:
 
 ## Testing Pattern
 
-Create test files in ~/molt-test/ and run:
+Create test files in ~/grain-test/ and run:
 ```bash
-cd ~/molt-test
-molt -p "test task description"
+cd ~/grain-test
+grain -p "test task description"
 ```

@@ -9,7 +9,7 @@ const TestApp = () => {
   useInput((char, key) => {
     if (key.return) {
       if (input.trim()) {
-        setMessages(prev => [...prev, `You: ${input}`, `molt: Echo - ${input}`]);
+        setMessages(prev => [...prev, `You: ${input}`, `grain: Echo - ${input}`]);
         setInput('');
       }
     } else if (key.backspace) {
@@ -24,11 +24,11 @@ const TestApp = () => {
   return (
     <Box flexDirection="column" padding={1}>
       <Box borderStyle="round" borderColor="cyan" paddingX={2} marginBottom={1}>
-        <Text bold color="cyan">molt test</Text>
+        <Text bold color="cyan">grain test</Text>
       </Box>
 
       {messages.map((msg, i) => (
-        <Text key={i} dimColor={msg.startsWith('molt')}>{msg}</Text>
+        <Text key={i} dimColor={msg.startsWith('grain')}>{msg}</Text>
       ))}
 
       <Box marginTop={1}>

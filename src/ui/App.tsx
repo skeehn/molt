@@ -21,7 +21,7 @@ export const App: React.FC<AppProps> = ({ state, onInput, onApprove, onReject })
     <Box flexDirection="column" paddingX={1} paddingY={1}>
       {/* Header */}
       <Box borderStyle="round" borderColor="cyan" paddingX={2} marginBottom={1}>
-        <Text bold color="cyan">molt</Text>
+        <Text bold color="cyan">grain</Text>
         <Text dimColor> v0.3.0 • {state.sessionId.slice(0, 8)}</Text>
       </Box>
 

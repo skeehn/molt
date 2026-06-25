@@ -1,9 +1,9 @@
 {
-  "name": "molt",
+  "name": "grain",
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "molt": "./dist/cli.js"
+    "grain": "./dist/cli.js"
   },
   "scripts": {
     "build": "bun build src/cli.ts --outdir dist --target node",

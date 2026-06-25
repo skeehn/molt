@@ -22,7 +22,7 @@ interface CostSummary {
   by_date: Record<string, { tokens: number; cost: number }>;
 }
 
-const COST_DB_PATH = join(homedir(), '.molt', 'costs.jsonl');
+const COST_DB_PATH = join(homedir(), '.grain', 'cost-tracking.json');
 
 // Pricing per 1M tokens (as of June 2026)
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
