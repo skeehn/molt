@@ -11,33 +11,30 @@ import { workspaceScanTool, executeWorkspaceScan } from './workspace.js';
 // import { syntaxCheckTool, executeSyntaxCheck } from './syntax.js'; // Disabled: needs tree-sitter native bindings
 import { semanticSearchTool, executeSemanticSearch } from './semantic-search.js';
 import { multiEditTool, executeMultiEdit } from './multi-edit.js';
-import { gitCheckpointTool, gitRollbackTool, gitStatusTool, executeGitCheckpoint, executeGitRollback, executeGitStatus } from './git.js';
+import { gitTool, executeGit } from './git.js';
 import { testRunnerTool, executeTestRunner } from './test-runner.js';
-import { costTrackingTool, executeCostSummary } from './cost-tracking.js';
 import { projectExplainerTool, executeExplainProject } from './project-explainer.js';
-import { dataFlowTool, executeAnalyzeDataFlow } from './dataflow-analyzer.js';
 import { knowledgeGraphTool, executeExtractKnowledgeGraph } from './knowledge-graph.js';
 
 export const TOOLS: Tool[] = [
+  // Core tools (10)
   bashTool,
   readTool,
   writeTool,
   patchTool,
   grepTool,
-  engramTool,
   workspaceScanTool,
-  semanticSearchTool,
-  multiEditTool,
-  gitCheckpointTool,
-  gitRollbackTool,
-  gitStatusTool,
+  gitTool,
   testRunnerTool,
-  costTrackingTool,
-  projectExplainerTool,
-  dataFlowTool,
-  knowledgeGraphTool,
   delegateTool,
   finishTool,
+  
+  // Advanced tools (5)
+  engramTool,
+  semanticSearchTool,
+  multiEditTool,
+  projectExplainerTool,
+  knowledgeGraphTool,
 ];
 
 const executors: Record<string, (input: any) => Promise<ToolResult>> = {
@@ -50,13 +47,9 @@ const executors: Record<string, (input: any) => Promise<ToolResult>> = {
   workspace_scan: executeWorkspaceScan,
   semantic_search: executeSemanticSearch,
   multi_edit: executeMultiEdit,
-  git_checkpoint: executeGitCheckpoint,
-  git_rollback: executeGitRollback,
-  git_status: executeGitStatus,
+  git: executeGit,
   run_tests: executeTestRunner,
-  cost_summary: executeCostSummary,
   explain_project: executeExplainProject,
-  analyze_dataflow: executeAnalyzeDataFlow,
   extract_knowledge_graph: executeExtractKnowledgeGraph,
   delegate: executeDelegate,
   finish: executeFinish,

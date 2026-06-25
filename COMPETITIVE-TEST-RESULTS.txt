@@ -1,0 +1,44 @@
+🧪 grain Competitive Testing Suite
+===================================
+
+TEST 1: Real Work Verification
+------------------------------
+Goal: Verify grain DOES work, not just plans
+
+🧠 Simple task (read/status) → using fastest, cheapest model (us.anthropic.claude-sonnet-4-5-20250929-v1:0, ~$3.00/$15.00 per 1M tokens)
+Using bedrock / us.anthropic.claude-sonnet-4-5-20250929-v1:0
+- Planning...
+[K[KPLAN:
+1. Read test.js to see current content
+2. Patch the function name from 'add' to 'sum'
+⚡ read: 
+
+
+📋 Execution Plan:
+  1. Read test.js to see current content
+  2. Patch the function name from 'add' to 'sum'
+
+  1|function add(a, b) { return a + b; }
+  2|
+✓ Execution verified and learned
+- Planning...
+[K[KPLAN:
+1. Change function name from 'add' to 'sum' in test.js
+2. Verify the change
+⚡ patch: 
+
+
+📋 Execution Plan:
+  1. Change function name from 'add' to 'sum' in test.js
+  2. Verify the change
+
+  Patched /private/tmp/grain-competitive-tests/test.js
+  - function add(a, b) { return a + b; }
+  + function sum(a, b) { return a + b; }
+✓ Execution verified and learned
+- Planning...
+[K[K
+⚡ finish: 
+
+✓ Task complete.
+✅ PASS: grain modified the file (real work)
