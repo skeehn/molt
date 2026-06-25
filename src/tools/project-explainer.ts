@@ -4,6 +4,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { join, basename, extname, relative } from 'path';
 import { execSync } from 'child_process';
 import type { ToolResult } from '../providers/types.js';
+import { getContextTracker } from '../agent/context-tracker.js';
 
 interface ProjectType {
   primary: string; // 'rust' | 'typescript' | 'go' | 'python' | 'nextjs' | 'web' | 'monorepo'
@@ -614,7 +615,7 @@ function generateRustWorkspaceDiagram(structure: ProjectStructure): string {
 // Tool definition
 export const projectExplainerTool = {
   name: 'explain_project',
-  description: 'Analyze and explain a codebase (Rust, TypeScript, Go, Python, Next.js, etc.). Provides comprehensive understanding: structure, modules, dependencies, build system, tests, deployment, and documentation.',
+  description: 'Analyze and explain a codebase (Rust, TypeScript, Go, Python, Next.js, etc.). Provides comprehensive understanding: structure, modules, dependencies, build system, tests, deployment, and documentation. Results are cached in engram for fast subsequent calls.',
   input_schema: {
     type: 'object',
     properties: {
@@ -627,6 +628,10 @@ export const projectExplainerTool = {
         enum: ['text', 'diagram', 'both'],
         description: 'Output format: text explanation, ASCII diagram, or both',
       },
+      force_refresh: {
+        type: 'boolean',
+        description: 'Force fresh analysis instead of using cache (default: false)',
+      },
     },
   },
 };
@@ -634,9 +639,31 @@ export const projectExplainerTool = {
 export async function executeExplainProject(input: any): Promise<ToolResult> {
   const path = input.path || process.cwd();
   const format = input.format || 'both';
+  const forceRefresh = input.force_refresh || false;
   
   try {
-    const structure = await analyzeProject(path);
+    const tracker = getContextTracker();
+    
+    // Try to load from cache first (unless force refresh)
+    let structure: ProjectStructure | null = null;
+    
+    if (!forceRefresh) {
+      structure = await tracker.getCachedProjectAnalysis(path);
+    }
+    
+    // Cache miss or force refresh - analyze fresh
+    if (!structure) {
+      console.log('🔍 Analyzing project structure...');
+      structure = await analyzeProject(path);
+      
+      // Cache the analysis in engram
+      await tracker.cacheProjectAnalysis(path, structure);
+      
+      // Update session context
+      tracker.setProjectContext(structure.name, structure.type.primary);
+    } else {
+      console.log('⚡ Using cached analysis');
+    }
     
     let output = '';
     

@@ -1,157 +1,426 @@
-// Session context tracking - remember last files, operations, state
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+// Context Tracker - Session and cross-session context management via engram
+import { writeFileSync, readFileSync, existsSync, mkdirSync, statSync } from 'fs';
+import { join, dirname, basename, relative } from 'path';
 import { homedir } from 'os';
+import { executeEngram } from '../tools/engram.js';
 
-export interface SessionContext {
+interface SessionContext {
   sessionId: string;
+  startTime: number;
   workingDirectory: string;
-  lastModifiedFiles: string[];
-  lastReadFiles: string[];
-  currentWorkingFile?: string;
-  lastToolCalls: Array<{ tool: string; input: any; timestamp: number }>;
-  conversationSummary?: string;
-  updatedAt: number;
+  
+  // File tracking
+  lastModifiedFile?: string;
+  lastReadFile?: string;
+  recentFiles: string[]; // Last 10 files touched
+  
+  // Operation tracking
+  lastOperation?: string; // 'read', 'write', 'test', 'build', etc.
+  operationHistory: Array<{
+    operation: string;
+    files: string[];
+    timestamp: number;
+  }>;
+  
+  // Project context
+  projectName?: string;
+  projectType?: string; // 'rust-workspace', 'typescript', etc.
+  currentModule?: string; // Current crate/package being worked on
+  
+  // Task context
+  currentTask?: string;
+  taskContext?: Record<string, any>;
 }
 
-const CONTEXT_DIR = join(homedir(), '.molt', 'context');
-
-function getContextPath(sessionId: string): string {
-  mkdirSync(CONTEXT_DIR, { recursive: true });
-  return join(CONTEXT_DIR, `${sessionId}.json`);
+interface ProjectCache {
+  projectPath: string;
+  projectName: string;
+  lastAnalyzed: number;
+  gitCommit?: string;
+  
+  // Cached analysis
+  structure?: any; // ProjectStructure from project-explainer
+  summary?: string;
+  modules?: any[];
+  
+  // Quick lookups
+  fileIndex?: Map<string, string>; // filename -> full path
+  moduleIndex?: Map<string, string>; // module name -> path
 }
 
-export function loadSessionContext(sessionId: string): SessionContext {
-  const path = getContextPath(sessionId);
-  if (!existsSync(path)) {
+class ContextTracker {
+  private sessionPath: string;
+  private cachePath: string;
+  private session: SessionContext;
+  
+  constructor() {
+    const baseDir = join(homedir(), '.molt');
+    this.sessionPath = join(baseDir, 'session');
+    this.cachePath = join(baseDir, 'cache');
+    
+    // Ensure directories exist
+    [this.sessionPath, this.cachePath].forEach(dir => {
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+    });
+    
+    // Load or create session
+    this.session = this.loadSession();
+  }
+  
+  private loadSession(): SessionContext {
+    const sessionFile = join(this.sessionPath, 'current.json');
+    
+    if (existsSync(sessionFile)) {
+      try {
+        const data = readFileSync(sessionFile, 'utf-8');
+        return JSON.parse(data);
+      } catch (e) {
+        // Corrupted session, start fresh
+      }
+    }
+    
+    // New session
     return {
-      sessionId,
+      sessionId: Date.now().toString(),
+      startTime: Date.now(),
       workingDirectory: process.cwd(),
-      lastModifiedFiles: [],
-      lastReadFiles: [],
-      lastToolCalls: [],
-      updatedAt: Date.now(),
+      recentFiles: [],
+      operationHistory: [],
     };
   }
   
-  try {
-    const data = readFileSync(path, 'utf-8');
-    return JSON.parse(data);
-  } catch {
-    return {
-      sessionId,
-      workingDirectory: process.cwd(),
-      lastModifiedFiles: [],
-      lastReadFiles: [],
-      lastToolCalls: [],
-      updatedAt: Date.now(),
-    };
-  }
-}
-
-export function saveSessionContext(context: SessionContext): void {
-  context.updatedAt = Date.now();
-  const path = getContextPath(context.sessionId);
-  writeFileSync(path, JSON.stringify(context, null, 2));
-}
-
-export function trackToolCall(
-  context: SessionContext,
-  tool: string,
-  input: any,
-  output?: any
-): void {
-  // Track recent tool calls (keep last 20)
-  context.lastToolCalls.push({
-    tool,
-    input,
-    timestamp: Date.now(),
-  });
-  if (context.lastToolCalls.length > 20) {
-    context.lastToolCalls.shift();
+  private saveSession() {
+    const sessionFile = join(this.sessionPath, 'current.json');
+    writeFileSync(sessionFile, JSON.stringify(this.session, null, 2));
   }
   
   // Track file operations
-  if (tool === 'write' || tool === 'patch' || tool === 'multi_edit') {
-    const files = Array.isArray(input.edits) 
-      ? input.edits.map((e: any) => e.path)
-      : [input.path];
+  trackFileRead(path: string) {
+    this.session.lastReadFile = path;
+    this.addRecentFile(path);
+    this.trackOperation('read', [path]);
+  }
+  
+  trackFileWrite(path: string) {
+    this.session.lastModifiedFile = path;
+    this.addRecentFile(path);
+    this.trackOperation('write', [path]);
+  }
+  
+  trackFileEdit(path: string) {
+    this.session.lastModifiedFile = path;
+    this.addRecentFile(path);
+    this.trackOperation('edit', [path]);
+  }
+  
+  private addRecentFile(path: string) {
+    // Remove if already exists
+    this.session.recentFiles = this.session.recentFiles.filter(f => f !== path);
+    // Add to front
+    this.session.recentFiles.unshift(path);
+    // Keep only last 10
+    this.session.recentFiles = this.session.recentFiles.slice(0, 10);
+    this.saveSession();
+  }
+  
+  private trackOperation(operation: string, files: string[]) {
+    this.session.lastOperation = operation;
+    this.session.operationHistory.push({
+      operation,
+      files,
+      timestamp: Date.now(),
+    });
+    // Keep only last 50 operations
+    if (this.session.operationHistory.length > 50) {
+      this.session.operationHistory = this.session.operationHistory.slice(-50);
+    }
+    this.saveSession();
+  }
+  
+  // Resolve ambiguous references
+  resolveReference(ref: string): string | null {
+    const normalized = ref.toLowerCase().trim();
     
-    for (const file of files) {
-      if (!context.lastModifiedFiles.includes(file)) {
-        context.lastModifiedFiles.push(file);
+    // "that file" / "the file" = last modified or last read
+    if (normalized.match(/^(that|the|this)\s+file$/)) {
+      return this.session.lastModifiedFile || this.session.lastReadFile || null;
+    }
+    
+    // "that test" / "the test" = last test file
+    if (normalized.match(/^(that|the|this)\s+test/)) {
+      const testFile = this.session.recentFiles.find(f => 
+        f.includes('.test.') || f.includes('.spec.') || f.includes('_test.')
+      );
+      return testFile || null;
+    }
+    
+    // "that module" / "the module" = current module
+    if (normalized.match(/^(that|the|this)\s+module/)) {
+      return this.session.currentModule || null;
+    }
+    
+    // "the last file" = last read/modified
+    if (normalized.match(/last\s+file/)) {
+      return this.session.lastModifiedFile || this.session.lastReadFile || null;
+    }
+    
+    return null;
+  }
+  
+  // Get context summary for injection into prompts
+  getContextSummary(): string {
+    const lines: string[] = [];
+    
+    lines.push('## Current Session Context');
+    lines.push('');
+    
+    if (this.session.projectName) {
+      lines.push(`**Project:** ${this.session.projectName} (${this.session.projectType || 'unknown type'})`);
+    }
+    
+    lines.push(`**Working Directory:** ${this.session.workingDirectory}`);
+    
+    if (this.session.currentModule) {
+      lines.push(`**Current Module:** ${this.session.currentModule}`);
+    }
+    
+    if (this.session.currentTask) {
+      lines.push(`**Current Task:** ${this.session.currentTask}`);
+    }
+    
+    lines.push('');
+    
+    if (this.session.lastModifiedFile) {
+      lines.push(`**Last Modified:** ${this.session.lastModifiedFile}`);
+    }
+    
+    if (this.session.lastReadFile && this.session.lastReadFile !== this.session.lastModifiedFile) {
+      lines.push(`**Last Read:** ${this.session.lastReadFile}`);
+    }
+    
+    if (this.session.recentFiles.length > 0) {
+      lines.push('');
+      lines.push('**Recent Files:**');
+      this.session.recentFiles.slice(0, 5).forEach(f => {
+        lines.push(`  - ${f}`);
+      });
+    }
+    
+    if (this.session.operationHistory.length > 0) {
+      lines.push('');
+      lines.push('**Recent Operations:**');
+      this.session.operationHistory.slice(-5).forEach(op => {
+        const timeAgo = Math.floor((Date.now() - op.timestamp) / 1000);
+        lines.push(`  - ${op.operation} (${timeAgo}s ago): ${op.files.join(', ')}`);
+      });
+    }
+    
+    return lines.join('\n');
+  }
+  
+  // Update project context
+  setProjectContext(name: string, type: string, module?: string) {
+    this.session.projectName = name;
+    this.session.projectType = type;
+    if (module) {
+      this.session.currentModule = module;
+    }
+    this.saveSession();
+  }
+  
+  // Update task context
+  setTaskContext(task: string, context?: Record<string, any>) {
+    this.session.currentTask = task;
+    this.session.taskContext = context;
+    this.saveSession();
+  }
+  
+  clearTaskContext() {
+    this.session.currentTask = undefined;
+    this.session.taskContext = undefined;
+    this.saveSession();
+  }
+  
+  // Project caching via engram
+  async cacheProjectAnalysis(projectPath: string, analysis: any) {
+    try {
+      // Get git commit for cache invalidation
+      let gitCommit: string | undefined;
+      try {
+        const { execSync } = await import('child_process');
+        gitCommit = execSync('git rev-parse HEAD', { cwd: projectPath, encoding: 'utf-8' }).trim();
+      } catch (e) {
+        // Not a git repo or git not available
       }
-      context.currentWorkingFile = file;
+      
+      // Store in engram with structured tags
+      await executeEngram({
+        action: 'store',
+        content: JSON.stringify(analysis),
+        tags: [
+          'project-analysis',
+          `project:${basename(projectPath)}`,
+          `type:${analysis.type?.primary || 'unknown'}`,
+          `path:${projectPath}`,
+          gitCommit ? `commit:${gitCommit}` : 'no-git',
+        ],
+      });
+      
+      // Also store quick summary
+      const summary = this.generateProjectSummary(analysis);
+      await executeEngram({
+        action: 'store',
+        content: summary,
+        tags: [
+          'project-summary',
+          `project:${basename(projectPath)}`,
+          `path:${projectPath}`,
+        ],
+      });
+      
+      console.log(`📦 Cached project analysis for ${basename(projectPath)}`);
+    } catch (error: any) {
+      console.warn(`Warning: Could not cache project analysis: ${error.message}`);
+    }
+  }
+  
+  async getCachedProjectAnalysis(projectPath: string): Promise<any | null> {
+    try {
+      // Check if git commit changed
+      let currentCommit: string | undefined;
+      try {
+        const { execSync } = await import('child_process');
+        currentCommit = execSync('git rev-parse HEAD', { cwd: projectPath, encoding: 'utf-8' }).trim();
+      } catch (e) {
+        // Not a git repo
+      }
+      
+      // Query engram for cached analysis
+      const result = await executeEngram({
+        action: 'search',
+        query: `project analysis ${basename(projectPath)}`,
+        tags: ['project-analysis', `path:${projectPath}`],
+        limit: 1,
+      });
+      
+      if (result.is_error || !result.content) {
+        return null;
+      }
+      
+      // Parse results
+      const lines = result.content.split('\n');
+      let analysisContent: string | null = null;
+      let cachedCommit: string | null = null;
+      
+      for (const line of lines) {
+        if (line.startsWith('Content:')) {
+          analysisContent = line.substring('Content:'.length).trim();
+        }
+        if (line.includes('commit:')) {
+          const match = line.match(/commit:([a-f0-9]+)/);
+          if (match) cachedCommit = match[1];
+        }
+      }
+      
+      if (!analysisContent) {
+        return null;
+      }
+      
+      // Invalidate cache if git commit changed
+      if (currentCommit && cachedCommit && currentCommit !== cachedCommit) {
+        console.log('📦 Cache invalid (git commit changed), re-analyzing...');
+        return null;
+      }
+      
+      // Parse and return cached analysis
+      try {
+        const analysis = JSON.parse(analysisContent);
+        console.log(`⚡ Loaded cached project analysis for ${basename(projectPath)}`);
+        return analysis;
+      } catch (e) {
+        // Corrupted cache
+        return null;
+      }
+    } catch (error: any) {
+      console.warn(`Warning: Could not load cached analysis: ${error.message}`);
+      return null;
+    }
+  }
+  
+  private generateProjectSummary(analysis: any): string {
+    const lines: string[] = [];
+    
+    lines.push(`# ${analysis.name}`);
+    lines.push('');
+    lines.push(`**Type:** ${analysis.type?.primary || 'unknown'}`);
+    
+    if (analysis.type?.languages?.length > 0) {
+      lines.push(`**Languages:** ${analysis.type.languages.join(', ')}`);
     }
     
-    // Keep only last 10 modified files
-    if (context.lastModifiedFiles.length > 10) {
-      context.lastModifiedFiles = context.lastModifiedFiles.slice(-10);
-    }
-  }
-  
-  if (tool === 'read') {
-    const file = input.path;
-    if (!context.lastReadFiles.includes(file)) {
-      context.lastReadFiles.push(file);
+    if (analysis.modules?.length > 0) {
+      lines.push(`**Modules:** ${analysis.modules.length} (${analysis.modules.map((m: any) => m.name).join(', ')})`);
     }
     
-    // Keep only last 10 read files
-    if (context.lastReadFiles.length > 10) {
-      context.lastReadFiles = context.lastReadFiles.slice(-10);
+    lines.push(`**Size:** ${analysis.fileCount || '?'} files, ${(analysis.lineCount || 0).toLocaleString()} lines`);
+    
+    if (analysis.build?.system) {
+      lines.push(`**Build:** ${analysis.build.system}`);
+    }
+    
+    if (analysis.deployment?.platform) {
+      lines.push(`**Deploy:** ${analysis.deployment.platform}`);
+    }
+    
+    return lines.join('\n');
+  }
+  
+  // Store learning in engram
+  async storeLearn(content: string, tags: string[]) {
+    try {
+      await executeEngram({
+        action: 'store',
+        content,
+        tags: ['learning', ...tags],
+      });
+    } catch (error: any) {
+      console.warn(`Warning: Could not store learning: ${error.message}`);
     }
   }
   
-  saveSessionContext(context);
+  // Recall relevant context from engram
+  async recallContext(query: string, tags?: string[]): Promise<string> {
+    try {
+      const result = await executeEngram({
+        action: 'search',
+        query,
+        tags,
+        limit: 5,
+      });
+      
+      if (result.is_error || !result.content) {
+        return '';
+      }
+      
+      return result.content;
+    } catch (error: any) {
+      return '';
+    }
+  }
 }
 
-export function getContextSummary(context: SessionContext): string {
-  const parts: string[] = [];
-  
-  if (context.currentWorkingFile) {
-    parts.push(`Currently working on: ${context.currentWorkingFile}`);
+// Singleton instance
+let tracker: ContextTracker | null = null;
+
+export function getContextTracker(): ContextTracker {
+  if (!tracker) {
+    tracker = new ContextTracker();
   }
-  
-  if (context.lastModifiedFiles.length > 0) {
-    const recent = context.lastModifiedFiles.slice(-5);
-    parts.push(`Recently modified: ${recent.join(', ')}`);
-  }
-  
-  if (context.lastReadFiles.length > 0) {
-    const recent = context.lastReadFiles.slice(-5);
-    parts.push(`Recently viewed: ${recent.join(', ')}`);
-  }
-  
-  if (context.lastToolCalls.length > 0) {
-    const recent = context.lastToolCalls.slice(-3);
-    const summary = recent.map(t => t.tool).join(' → ');
-    parts.push(`Recent operations: ${summary}`);
-  }
-  
-  return parts.length > 0 ? '\n\n' + parts.join('\n') : '';
+  return tracker;
 }
 
-export function resolveFileReference(
-  context: SessionContext,
-  reference: string
-): string | null {
-  // Resolve ambiguous references like "that file", "the test file"
-  const lower = reference.toLowerCase();
-  
-  if (lower.includes('that file') || lower.includes('this file') || lower.includes('the file')) {
-    return context.currentWorkingFile || context.lastModifiedFiles[context.lastModifiedFiles.length - 1] || null;
-  }
-  
-  if (lower.includes('test file')) {
-    const testFile = [...context.lastModifiedFiles, ...context.lastReadFiles]
-      .reverse()
-      .find(f => f.includes('.test.') || f.includes('.spec.'));
-    return testFile || null;
-  }
-  
-  if (lower.includes('last file')) {
-    return context.lastModifiedFiles[context.lastModifiedFiles.length - 1] || null;
-  }
-  
-  return null;
+export function resetContextTracker() {
+  tracker = null;
 }

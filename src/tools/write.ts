@@ -1,6 +1,7 @@
 import { writeFileSync, mkdirSync } from 'fs';
-import { resolve, dirname } from 'path';
-import type { ToolResult } from '../providers/types.js';
+import { dirname } from 'path';
+import type { Tool, ToolResult } from '../providers/types.js';
+import { getContextTracker } from '../agent/context-tracker.js';
 
 export const writeTool = {
   name: 'write',
