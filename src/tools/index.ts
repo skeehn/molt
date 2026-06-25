@@ -15,6 +15,7 @@ import { gitCheckpointTool, gitRollbackTool, gitStatusTool, executeGitCheckpoint
 import { testRunnerTool, executeTestRunner } from './test-runner.js';
 import { costTrackingTool, executeCostSummary } from './cost-tracking.js';
 import { projectExplainerTool, executeExplainProject } from './project-explainer.js';
+import { dataFlowTool, executeAnalyzeDataFlow } from './dataflow-analyzer.js';
 
 export const TOOLS: Tool[] = [
   bashTool,
@@ -32,6 +33,7 @@ export const TOOLS: Tool[] = [
   testRunnerTool,
   costTrackingTool,
   projectExplainerTool,
+  dataFlowTool,
   delegateTool,
   finishTool,
 ];
@@ -52,6 +54,7 @@ const executors: Record<string, (input: any) => Promise<ToolResult>> = {
   run_tests: executeTestRunner,
   cost_summary: executeCostSummary,
   explain_project: executeExplainProject,
+  analyze_dataflow: executeAnalyzeDataFlow,
   delegate: executeDelegate,
   finish: executeFinish,
 };
