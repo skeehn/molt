@@ -1,6 +1,18 @@
 {
   "name": "grain",
   "version": "0.1.0",
+  "description": "Self-improving AI coding agent that learns from your codebase",
+  "keywords": ["ai", "agent", "coding", "self-improving", "knowledge-graph", "skills"],
+  "author": "Stephen Keehn",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/grain.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/grain/issues"
+  },
+  "homepage": "https://github.com/yourusername/grain#readme",
   "type": "module",
   "bin": {
     "grain": "./dist/cli.js"

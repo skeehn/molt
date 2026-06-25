@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 
-export interface MoltConfig {
+export interface GrainConfig {
   provider: string;
   model: string | null;
   engram_db: string;
@@ -12,7 +12,7 @@ export interface MoltConfig {
 const CONFIG_DIR = join(homedir(), '.grain');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
 
-const DEFAULTS: MoltConfig = {
+const DEFAULTS: GrainConfig = {
   provider: 'bedrock',
   model: null,
   engram_db: '~/.engram/knowledge',
@@ -30,7 +30,7 @@ function checkEnvVar(varName: string): boolean {
   return !!process.env[varName];
 }
 
-export function validateConfig(config: MoltConfig): ValidationResult {
+export function validateConfig(config: GrainConfig): ValidationResult {
   // Validate provider
   if (!VALID_PROVIDERS.includes(config.provider as any)) {
     return {
@@ -73,7 +73,7 @@ export function validateConfig(config: MoltConfig): ValidationResult {
   return { valid: true };
 }
 
-export function loadConfig(): MoltConfig {
+export function loadConfig(): GrainConfig {
   if (!existsSync(CONFIG_PATH)) {
     return { ...DEFAULTS };
   }
@@ -97,7 +97,7 @@ export function loadConfig(): MoltConfig {
   }
 }
 
-export function saveConfig(config: MoltConfig | Partial<MoltConfig>): void {
+export function saveConfig(config: GrainConfig | Partial<GrainConfig>): void {
   if (!existsSync(CONFIG_DIR)) {
     mkdirSync(CONFIG_DIR, { recursive: true });
   }
