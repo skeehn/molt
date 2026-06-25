@@ -230,6 +230,14 @@ class ContextTracker {
     this.saveSession();
   }
   
+  // Update project context from path (for tools)
+  updateProjectContext(path: string, operation: string) {
+    const projectName = basename(path);
+    this.session.projectName = projectName;
+    this.session.workingDirectory = path;
+    this.trackOperation(operation, [path]);
+  }
+  
   // Update task context
   setTaskContext(task: string, context?: Record<string, any>) {
     this.session.currentTask = task;

@@ -16,6 +16,7 @@ import { testRunnerTool, executeTestRunner } from './test-runner.js';
 import { costTrackingTool, executeCostSummary } from './cost-tracking.js';
 import { projectExplainerTool, executeExplainProject } from './project-explainer.js';
 import { dataFlowTool, executeAnalyzeDataFlow } from './dataflow-analyzer.js';
+import { knowledgeGraphTool, executeExtractKnowledgeGraph } from './knowledge-graph.js';
 
 export const TOOLS: Tool[] = [
   bashTool,
@@ -34,6 +35,7 @@ export const TOOLS: Tool[] = [
   costTrackingTool,
   projectExplainerTool,
   dataFlowTool,
+  knowledgeGraphTool,
   delegateTool,
   finishTool,
 ];
@@ -55,6 +57,7 @@ const executors: Record<string, (input: any) => Promise<ToolResult>> = {
   cost_summary: executeCostSummary,
   explain_project: executeExplainProject,
   analyze_dataflow: executeAnalyzeDataFlow,
+  extract_knowledge_graph: executeExtractKnowledgeGraph,
   delegate: executeDelegate,
   finish: executeFinish,
 };
