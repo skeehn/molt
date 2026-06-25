@@ -40,12 +40,19 @@ export async function extractKnowledgeGraph(projectPath: string): Promise<Knowle
   
   // Detect project type
   const files = readdirSync(projectPath);
+  
   let projectType: 'rust' | 'typescript' | 'go' | 'python' | 'unknown' = 'unknown';
   
-  if (files.includes('Cargo.toml')) projectType = 'rust';
-  else if (files.includes('package.json') && files.includes('tsconfig.json')) projectType = 'typescript';
-  else if (files.includes('go.mod')) projectType = 'go';
-  else if (files.includes('requirements.txt') || files.includes('pyproject.toml')) projectType = 'python';
+  // Check for project markers
+  if (files.includes('Cargo.toml')) {
+    projectType = 'rust';
+  } else if (files.includes('go.mod')) {
+    projectType = 'go';
+  } else if (files.includes('requirements.txt') || files.includes('pyproject.toml')) {
+    projectType = 'python';
+  } else if (files.includes('package.json') || files.includes('tsconfig.json') || files.some((f: string) => f.endsWith('.ts'))) {
+    projectType = 'typescript';
+  }
   
   // Extract based on project type
   switch (projectType) {
@@ -187,12 +194,12 @@ async function extractTypeScriptKnowledgeGraph(
     const lines = content.split('\n');
     const relPath = relative(projectPath, file);
     
-    // Extract functions
-    const fnRegex = /^export\s+(async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
-    const arrowFnRegex = /^export\s+const\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(async\s*)?\(/;
-    const classRegex = /^export\s+class\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
-    const interfaceRegex = /^export\s+interface\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
-    const typeRegex = /^export\s+type\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
+    // Extract functions (removed ^ anchor since we match on trimmed lines)
+    const fnRegex = /export\s+(async\s+)?function\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
+    const arrowFnRegex = /export\s+const\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(async\s*)?\(/;
+    const classRegex = /export\s+class\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
+    const interfaceRegex = /export\s+interface\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
+    const typeRegex = /export\s+type\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
     
     lines.forEach((line, idx) => {
       const trimmed = line.trim();
