@@ -66,6 +66,9 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
   } else {
     sessionId = createSession();
   }
+  
+  // Load session context (file tracking, project info, etc.)
+  loadSessionContext(sessionId);
 
   // Initial prompt
   if (opts.prompt) {
@@ -86,6 +89,13 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
   while (true) {
     // === PHASE 1: UNDERSTAND ===
     let system = getSystemPrompt();
+    
+    // Inject session context into system prompt
+    const contextSummary = getContextSummary();
+    if (contextSummary) {
+      system += `\n\n## Session Context\n${contextSummary}`;
+    }
+    
     const lastUserMsg = messages[messages.length - 1];
     if (lastUserMsg?.role === 'user') {
       const userText = lastUserMsg.content
@@ -260,7 +270,13 @@ Then proceed with execution.`;
             continue;
           }
 
-          const result = await executeTool(block.name, block.input);
+          // Resolve file references in tool input
+          const resolvedInput = resolveFileReference(block.input);
+          
+          const result = await executeTool(block.name, resolvedInput);
+          
+          // Track tool call in context
+          trackToolCall(block.name, resolvedInput, result);
           
           // Ensure result.content is a string
           const resultContent = typeof result.content === 'string' 
@@ -365,6 +381,8 @@ Then proceed with execution.`;
     }
   }
 
+  // Save context on exit
+  saveSessionContext(sessionId);
   renderer.info('Goodbye!');
 }
 

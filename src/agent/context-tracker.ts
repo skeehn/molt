@@ -424,3 +424,38 @@ export function getContextTracker(): ContextTracker {
 export function resetContextTracker() {
   tracker = null;
 }
+
+// Convenience wrappers for common operations
+export function loadSessionContext(sessionId: string) {
+  return getContextTracker().loadSession(sessionId);
+}
+
+export function saveSessionContext(sessionId: string) {
+  return getContextTracker().saveSession(sessionId);
+}
+
+export function trackToolCall(toolName: string, input: any, result: any) {
+  const tracker = getContextTracker();
+  
+  // Track file operations
+  if (toolName === 'write' && input.path) {
+    tracker.trackFileWrite(input.path);
+  } else if (toolName === 'read' && input.path) {
+    tracker.trackFileRead(input.path);
+  } else if (toolName === 'patch' && input.path) {
+    tracker.trackFileEdit(input.path);
+  }
+  
+  // Track operation
+  tracker.trackOperation(toolName, [input.path].filter(Boolean));
+}
+
+export function getContextSummary(): string {
+  return getContextTracker().getContextSummary();
+}
+
+export function resolveFileReference(input: any): any {
+  // For now, just return input as-is
+  // TODO: Implement smart reference resolution ("that file" → actual path)
+  return input;
+}

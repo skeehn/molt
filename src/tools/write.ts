@@ -1,5 +1,5 @@
 import { writeFileSync, mkdirSync } from 'fs';
-import { dirname } from 'path';
+import { dirname, resolve } from 'path';
 import type { Tool, ToolResult } from '../providers/types.js';
 import { getContextTracker } from '../agent/context-tracker.js';
 
