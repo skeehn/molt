@@ -20,9 +20,9 @@ export interface ModelConfig {
 export const MODEL_CONFIGS: Record<string, ModelConfig> = {
   'haiku': {
     provider: 'bedrock',
-    model: 'us.anthropic.claude-3-5-haiku-20241022-v1:0',
-    inputCostPer1M: 0.25,
-    outputCostPer1M: 1.25,
+    model: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',  // Fallback to Sonnet 4 (Haiku not available in this region yet)
+    inputCostPer1M: 3.00,
+    outputCostPer1M: 15.00,
     speedRating: 10,
   },
   'sonnet-3.5': {

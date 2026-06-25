@@ -28,10 +28,24 @@ interface PlanStep {
 
 export async function agentLoop(opts: AgentOpts): Promise<void> {
   const config = loadConfig();
-  const providerName = opts.provider || config.provider;
-  const modelName = opts.model || config.model || undefined;
+  
+  // Smart model routing based on task complexity
+  let providerName = opts.provider || config.provider;
+  let modelName = opts.model || config.model || undefined;
+  
+  // If user didn't force a model and we have a prompt, use smart routing
+  if (!opts.model && !opts.provider && opts.prompt) {
+    const complexity = classifyTaskComplexity(opts.prompt);
+    const modelConfig = routeModel(complexity, {
+      preferCheap: (opts as any).preferCheap,
+      preferFast: (opts as any).preferFast,
+    });
+    providerName = modelConfig.provider;
+    modelName = modelConfig.model;
+    renderer.info(`🧠 ${explainRouting(complexity, modelConfig)}`);
+  }
+  
   const provider = getProvider(providerName, modelName);
-
   renderer.info(`Using ${provider.name} / ${provider.model}`);
 
   // Session management
