@@ -10,17 +10,27 @@ import { finishTool, executeFinish } from './finish.js';
 import { workspaceScanTool, executeWorkspaceScan } from './workspace.js';
 // import { syntaxCheckTool, executeSyntaxCheck } from './syntax.js'; // Disabled: needs tree-sitter native bindings
 import { semanticSearchTool, executeSemanticSearch } from './semantic-search.js';
+import { multiEditTool, executeMultiEdit } from './multi-edit.js';
+import { gitCheckpointTool, gitRollbackTool, gitStatusTool, executeGitCheckpoint, executeGitRollback, executeGitStatus } from './git.js';
+import { testRunnerTool, executeTestRunner } from './test-runner.js';
+import { costTrackingTool, executeCostSummary } from './cost-tracking.js';
 
 export const TOOLS: Tool[] = [
   bashTool,
   readTool,
   writeTool,
   patchTool,
+  multiEditTool,
   grepTool,
   engramTool,
   workspaceScanTool,
-  // syntaxCheckTool, // Requires tree-sitter native bindings
+  // syntaxCheckTool, // Disabled: needs tree-sitter native bindings
   semanticSearchTool,
+  gitCheckpointTool,
+  gitRollbackTool,
+  gitStatusTool,
+  testRunnerTool,
+  costTrackingTool,
   delegateTool,
   finishTool,
 ];
@@ -30,11 +40,17 @@ const executors: Record<string, (input: any) => Promise<ToolResult>> = {
   read: executeRead,
   write: executeWrite,
   patch: executePatch,
+  multi_edit: executeMultiEdit,
   grep: executeGrep,
   engram: executeEngram,
   workspace_scan: executeWorkspaceScan,
   // syntax_check: executeSyntaxCheck, // Disabled
   semantic_search: executeSemanticSearch,
+  git_checkpoint: executeGitCheckpoint,
+  git_rollback: executeGitRollback,
+  git_status: executeGitStatus,
+  run_tests: executeTestRunner,
+  cost_summary: executeCostSummary,
   delegate: executeDelegate,
   finish: executeFinish,
 };
