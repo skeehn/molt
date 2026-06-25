@@ -3,6 +3,7 @@ import type { Message, ContentBlock } from '../providers/types.js';
 import { getProvider } from '../providers/index.js';
 import { TOOLS, executeTool } from '../tools/index.js';
 import { classifyTaskComplexity, routeModel, explainRouting, estimateCost } from '../router/index.js';
+import { loadSessionContext, saveSessionContext, trackToolCall, getContextSummary, resolveFileReference } from './context-tracker.js';
 import { getSystemPrompt } from '../system-prompt.js';
 import { loadConfig } from '../config.js';
 import { createSession, addMessage, getMessages, getLastSession } from '../session/store.js';
