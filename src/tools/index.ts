@@ -14,23 +14,24 @@ import { multiEditTool, executeMultiEdit } from './multi-edit.js';
 import { gitCheckpointTool, gitRollbackTool, gitStatusTool, executeGitCheckpoint, executeGitRollback, executeGitStatus } from './git.js';
 import { testRunnerTool, executeTestRunner } from './test-runner.js';
 import { costTrackingTool, executeCostSummary } from './cost-tracking.js';
+import { projectExplainerTool, executeExplainProject } from './project-explainer.js';
 
 export const TOOLS: Tool[] = [
   bashTool,
   readTool,
   writeTool,
   patchTool,
-  multiEditTool,
   grepTool,
   engramTool,
   workspaceScanTool,
-  // syntaxCheckTool, // Disabled: needs tree-sitter native bindings
   semanticSearchTool,
+  multiEditTool,
   gitCheckpointTool,
   gitRollbackTool,
   gitStatusTool,
   testRunnerTool,
   costTrackingTool,
+  projectExplainerTool,
   delegateTool,
   finishTool,
 ];
@@ -40,17 +41,17 @@ const executors: Record<string, (input: any) => Promise<ToolResult>> = {
   read: executeRead,
   write: executeWrite,
   patch: executePatch,
-  multi_edit: executeMultiEdit,
   grep: executeGrep,
   engram: executeEngram,
   workspace_scan: executeWorkspaceScan,
-  // syntax_check: executeSyntaxCheck, // Disabled
   semantic_search: executeSemanticSearch,
+  multi_edit: executeMultiEdit,
   git_checkpoint: executeGitCheckpoint,
   git_rollback: executeGitRollback,
   git_status: executeGitStatus,
   run_tests: executeTestRunner,
   cost_summary: executeCostSummary,
+  explain_project: executeExplainProject,
   delegate: executeDelegate,
   finish: executeFinish,
 };
@@ -58,11 +59,10 @@ const executors: Record<string, (input: any) => Promise<ToolResult>> = {
 export async function executeTool(name: string, input: any): Promise<ToolResult> {
   const executor = executors[name];
   if (!executor) {
-    return { content: `Unknown tool: ${name}`, is_error: true };
+    return {
+      content: `Unknown tool: ${name}`,
+      is_error: true,
+    };
   }
-  try {
-    return await executor(input);
-  } catch (err: any) {
-    return { content: `Tool error (${name}): ${err.message}`, is_error: true };
-  }
+  return executor(input);
 }
