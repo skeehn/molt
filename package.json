@@ -1,25 +1,18 @@
 {
   "name": "grain",
-  "version": "0.1.0",
-  "description": "Self-improving AI coding agent that learns from your codebase",
-  "keywords": [
-    "ai",
-    "agent",
-    "coding",
-    "self-improving",
-    "knowledge-graph",
-    "skills"
-  ],
-  "author": "Stephen Keehn",
+  "version": "0.2.0",
+  "description": "Self-improving AI coding agent with persistent memory",
+  "keywords": ["ai", "agent", "coding", "llm", "bedrock", "anthropic", "knowledge-graph"],
+  "author": "Stephen Keehn <stephen@skeehn.com>",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/grain.git"
+    "url": "https://github.com/skeehn/grain.git"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/grain/issues"
+    "url": "https://github.com/skeehn/grain/issues"
   },
-  "homepage": "https://github.com/yourusername/grain#readme",
+  "homepage": "https://github.com/skeehn/grain#readme",
   "type": "module",
   "bin": {
     "grain": "./dist/cli.js"
@@ -27,11 +20,13 @@
   "scripts": {
     "build": "bun build src/cli.ts --outdir dist --target node --format esm",
     "dev": "bun run src/cli.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "release": "bash scripts/release.sh"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "latest",
     "@anthropic-ai/sdk": "latest",
+    "@aws-sdk/client-bedrock-runtime": "latest",
     "@types/react": "^19.2.17",
     "boxen": "^8.0.1",
     "chalk": "^5.6.2",

@@ -1,80 +1,136 @@
 # grain
 
-**Self-improving AI coding agent that learns from your codebase**
+Self-improving AI coding agent with persistent memory.
 
-grain is an AI agent that gets smarter with every project. It builds knowledge graphs, learns patterns, and saves skills—creating a feedback loop that makes it more effective over time.
-
-## Key Features
-
-- **Knowledge Graphs**: Extract deep codebase understanding (196 entities tested on real projects)
-- **Self-Improvement**: Proven 4x improvement loop—learns from mistakes and saves skills
-- **Skills System**: Captures and reuses successful patterns across sessions
-- **Multi-Language**: Native support for Rust, TypeScript, Go, Python
-- **Context Tracking**: Persistent session memory via engram + SQLite
-
-## Quick Start
-
-```bash
-# Install
-bun install
-
-# Run your first command
-grain -p "analyze this codebase"
-
-# Interactive mode
-grain
+```sh
+curl -fsSL https://raw.githubusercontent.com/skeehn/grain/main/install.sh | sh
 ```
-
-**Example output:**
-```
-📊 Extracted 63 entities, 89 relationships
-🧠 Learned 3 new patterns
-💾 Saved skill: optimize-rust-performance
-```
-
-## Capabilities
-
-- **Analyze Projects**: Deep understanding of structure, dependencies, data flow
-- **Extract Knowledge Graphs**: Entities, relationships, and architectural patterns
-- **Learn Patterns**: Identifies successful approaches and saves them as reusable skills
-- **Suggest Skills**: Recommends relevant skills based on current context
-- **Multi-Provider LLM**: Bedrock, Anthropic, OpenRouter, Ollama support
-- **Sub-Agent Delegation**: Parallelize complex tasks
-
-## Real Project Results
-
-**engram** (Rust): 196 entities, 10 crates, complete knowledge graph
-**ironrun** (Rust): 63 entities, 89 relationships mapped
-**grain** (TypeScript): Full self-analysis and improvement loop
-
-## Architecture
-
-Built in TypeScript with Bun runtime. Streaming agent loop with:
-- Tool execution engine (bash, read, write, patch, grep)
-- engram knowledge base integration
-- Session persistence (SQLite)
-- Raw streaming TUI (Claude Code style)
-
-```
-grain (agent loop)
-  ↓
-engram (knowledge base)
-  ↓
-skills (reusable patterns)
-  ↓
-improved performance
-```
-
-## What Makes grain Different
-
-**The self-improvement loop actually works.**
-
-Proven 4x on real projects: grain analyzes codebases, extracts knowledge, identifies patterns, saves skills, and applies them to new problems. Each session makes it smarter.
-
-Not just code generation—**code understanding that compounds**.
 
 ---
 
-**Location**: ~/grain  
-**Binary**: ~/bin/grain  
-**License**: MIT
+## What it is
+
+grain is a CLI agent that reads your codebase, writes code, runs commands, and remembers what it learns — across sessions, across projects. It routes tasks to the right model automatically (Haiku for simple, Sonnet for moderate, Opus for complex) to keep costs low.
+
+It uses [engram](https://github.com/skeehn/engram) as a local knowledge graph — every project grain works on gets indexed. The more you use it, the smarter it gets on your specific stack.
+
+---
+
+## Install
+
+**One-liner (recommended):**
+```sh
+curl -fsSL https://raw.githubusercontent.com/skeehn/grain/main/install.sh | sh
+```
+
+Installs `grain` and `engram` to `~/bin/`. Requires Node.js >= 18.
+
+**Then set up your provider:**
+```sh
+grain init
+```
+
+---
+
+## Quick start
+
+```sh
+# Explain a codebase
+grain "explain the architecture of this project"
+
+# Write code, fully automated
+grain --yes "add input validation to src/api/users.ts"
+
+# Debug something
+grain "why is the auth middleware returning 401 on valid tokens"
+
+# Build something new
+grain "build a dark-themed landing page for this project"
+```
+
+---
+
+## Commands
+
+```
+grain [task]                  run a task interactively
+grain "do something"          one-shot inline task
+grain --yes "task"            fully automated, no prompts
+
+grain init                    interactive setup wizard
+grain status                  check provider, engram, config
+grain update                  update to latest version
+
+grain config                  show current config
+grain config set provider <name>
+grain config set model <id>
+grain config set key <KEY_NAME> <value>    saves to ~/.grain/.env
+grain config set engram_db <path>
+grain config reset
+
+grain --help                  full help
+grain --version               show version
+```
+
+---
+
+## Providers
+
+| Provider    | Setup |
+|-------------|-------|
+| `bedrock`   | `aws configure` or set `AWS_REGION` + `AWS_ACCESS_KEY_ID` |
+| `anthropic` | `grain config set key ANTHROPIC_API_KEY sk-ant-...` |
+| `openrouter`| `grain config set key OPENROUTER_API_KEY ...` |
+| `ollama`    | Install [Ollama](https://ollama.ai), no key needed |
+
+API keys are saved to `~/.grain/.env` — never to your shell profile. grain loads them automatically on startup.
+
+---
+
+## Config
+
+Everything lives in `~/.grain/`:
+
+```
+~/.grain/
+  config.json       provider, model, settings
+  .env              API keys (chmod 600, auto-loaded)
+  skills/           project-specific agent skills
+  sessions/         conversation logs
+```
+
+---
+
+## Memory (engram)
+
+grain uses [engram](https://github.com/skeehn/engram) — a local Rust knowledge graph — for persistent memory. Install script downloads it automatically.
+
+engram starts automatically in the background when you run grain. It runs at `localhost:7474`.
+
+Without engram, grain still works — just without cross-session memory.
+
+---
+
+## Flags
+
+```
+-y, --yes          auto-approve all tool calls
+-c, --concise      shorter output
+--provider <name>  override provider for this run
+--model <id>       override model for this run
+-h, --help
+-v, --version
+```
+
+---
+
+## Requirements
+
+- Node.js >= 18
+- One of: AWS credentials, Anthropic API key, OpenRouter API key, or Ollama
+
+---
+
+## License
+
+MIT

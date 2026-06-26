@@ -2,6 +2,8 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 
+export const GRAIN_VERSION = '0.2.0';
+
 export interface GrainConfig {
   provider: string;
   model: string | null;
@@ -9,115 +11,104 @@ export interface GrainConfig {
   max_tokens: number;
 }
 
-const CONFIG_DIR = join(homedir(), '.grain');
+const CONFIG_DIR  = join(homedir(), '.grain');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
+const ENV_PATH    = join(CONFIG_DIR, '.env');
 
 const DEFAULTS: GrainConfig = {
-  provider: 'bedrock',
-  model: null,
-  engram_db: '~/.engram/knowledge',
+  provider:   'bedrock',
+  model:      null,
+  engram_db:  '~/.engram/knowledge',
   max_tokens: 180000,
 };
 
-const VALID_PROVIDERS = ['bedrock', 'anthropic', 'openrouter', 'ollama'] as const;
+export const VALID_PROVIDERS = ['bedrock', 'anthropic', 'openrouter', 'ollama'] as const;
 
-interface ValidationResult {
-  valid: boolean;
-  error?: string;
+// ─── .env loading ─────────────────────────────────────────────────────────────
+// Load ~/.grain/.env into process.env at startup.
+// This means users never have to edit .zshrc / .bashrc for API keys —
+// grain manages them in one place.
+export function loadGrainEnv(): void {
+  if (!existsSync(ENV_PATH)) return;
+  try {
+    const lines = readFileSync(ENV_PATH, 'utf-8').split('\n');
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const eq = line.indexOf('=');
+      if (eq < 1) continue;
+      const key = line.slice(0, eq).trim();
+      const val = line.slice(eq + 1).trim().replace(/^["']|["']$/g, '');
+      if (key && !process.env[key]) process.env[key] = val; // never overwrite shell env
+    }
+  } catch { /* ignore */ }
 }
 
-function checkEnvVar(varName: string): boolean {
-  return !!process.env[varName];
+export function saveKeyToEnv(key: string, value: string): void {
+  ensureConfigDir();
+  let contents = '';
+  if (existsSync(ENV_PATH)) contents = readFileSync(ENV_PATH, 'utf-8');
+
+  const lines = contents.split('\n').filter(l => !l.startsWith(`${key}=`));
+  lines.push(`${key}=${value}`);
+  writeFileSync(ENV_PATH, lines.filter(l => l.trim()).join('\n') + '\n', { mode: 0o600 });
 }
 
-export function validateConfig(config: GrainConfig): ValidationResult {
-  // Validate provider
-  if (!VALID_PROVIDERS.includes(config.provider as any)) {
-    return {
-      valid: false,
-      error: `Invalid provider: ${config.provider}\n\nValid providers: ${VALID_PROVIDERS.join(', ')}\n\nRun: grain init`
-    };
+export function listEnvKeys(): Record<string, string> {
+  if (!existsSync(ENV_PATH)) return {};
+  const out: Record<string, string> = {};
+  for (const raw of readFileSync(ENV_PATH, 'utf-8').split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq < 1) continue;
+    const key = line.slice(0, eq).trim();
+    const val = line.slice(eq + 1).trim().replace(/^["']|["']$/g, '');
+    out[key] = val;
   }
+  return out;
+}
 
-  // Check required env vars for selected provider
-  let missingEnvVar: string | null = null;
+// ─── Config ───────────────────────────────────────────────────────────────────
 
-  switch (config.provider) {
-    case 'bedrock':
-      if (!checkEnvVar('AWS_REGION')) {
-        missingEnvVar = 'AWS_REGION';
-      }
-      break;
-    case 'anthropic':
-      if (!checkEnvVar('ANTHROPIC_API_KEY')) {
-        missingEnvVar = 'ANTHROPIC_API_KEY';
-      }
-      break;
-    case 'openrouter':
-      if (!checkEnvVar('OPENROUTER_API_KEY')) {
-        missingEnvVar = 'OPENROUTER_API_KEY';
-      }
-      break;
-    case 'ollama':
-      // Ollama doesn't require env vars (local)
-      break;
-  }
+export function ensureConfigDir(): void {
+  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true });
+}
 
-  if (missingEnvVar) {
-    return {
-      valid: false,
-      error: `Missing required environment variable: ${missingEnvVar}\n\nFor ${config.provider}, you need to set:\n  export ${missingEnvVar}=<your-value>\n\nRun: grain init`
-    };
-  }
-
-  return { valid: true };
+export function getConfigDir(): string {
+  ensureConfigDir();
+  return CONFIG_DIR;
 }
 
 export function loadConfig(): GrainConfig {
-  if (!existsSync(CONFIG_PATH)) {
-    return { ...DEFAULTS };
-  }
+  if (!existsSync(CONFIG_PATH)) return { ...DEFAULTS };
   try {
-    const raw = readFileSync(CONFIG_PATH, 'utf-8');
-    const parsed = JSON.parse(raw);
-    const config = { ...DEFAULTS, ...parsed };
-    
-    // Validate config
-    const validation = validateConfig(config);
-    if (!validation.valid) {
-      throw new Error(validation.error);
-    }
-    
-    return config;
-  } catch (err: any) {
-    if (err.message.includes('Invalid provider') || err.message.includes('Missing required')) {
-      throw err; // Re-throw validation errors
-    }
+    const parsed = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+    return { ...DEFAULTS, ...parsed };
+  } catch {
     return { ...DEFAULTS };
   }
 }
 
 export function saveConfig(config: GrainConfig | Partial<GrainConfig>): void {
-  if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
-  }
-  // If full config, save directly. If partial, merge with existing
-  if ('provider' in config && 'max_tokens' in config) {
-    writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
-  } else {
-    try {
-      const current = existsSync(CONFIG_PATH) ? JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')) : DEFAULTS;
-      const merged = { ...current, ...config };
-      writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2));
-    } catch {
-      writeFileSync(CONFIG_PATH, JSON.stringify({ ...DEFAULTS, ...config }, null, 2));
-    }
-  }
+  ensureConfigDir();
+  const current = existsSync(CONFIG_PATH)
+    ? (() => { try { return JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')); } catch { return {}; } })()
+    : {};
+  writeFileSync(CONFIG_PATH, JSON.stringify({ ...DEFAULTS, ...current, ...config }, null, 2));
 }
 
-export function getConfigDir(): string {
-  if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+export function validateConfig(config: GrainConfig): { valid: boolean; error?: string } {
+  if (!VALID_PROVIDERS.includes(config.provider as any)) {
+    return { valid: false, error: `Unknown provider "${config.provider}". Valid: ${VALID_PROVIDERS.join(', ')}.\n\nRun: grain init` };
   }
-  return CONFIG_DIR;
+  const needs: Record<string, string> = {
+    anthropic:  'ANTHROPIC_API_KEY',
+    openrouter: 'OPENROUTER_API_KEY',
+  };
+  const envKey = needs[config.provider];
+  if (envKey && !process.env[envKey]) {
+    return { valid: false, error: `${config.provider} requires ${envKey}.\n\nRun: grain config set key ${envKey} <your-key>\nor:  grain init` };
+  }
+  return { valid: true };
 }
