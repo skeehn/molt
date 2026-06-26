@@ -725,12 +725,15 @@ async function handleEngram(subcmd?: string, arg?: string): Promise<void> {
     if (!arg) { console.error(`${err} Usage: grain engram search <query>`); return; }
     const res = await fetch(`${ENGRAM_API}/search?q=${encodeURIComponent(arg)}&limit=10`).then(r => r.json()) as any[];
     if (!res.length) { console.log(dim(`No results for "${arg}"`)); return; }
+    // Normalize scores relative to top result
+    const maxScore = Math.max(...res.map((n: any) => n.score || 0), 0.001);
     console.log(`\n${bold(`engram search: "${arg}"`)}\n`);
     for (const node of res) {
       const tags = node.tags?.length ? dim(` [${node.tags.join(', ')}]`) : '';
-      const score = `${(node.score * 100).toFixed(0)}%`;
+      const normalizedPct = Math.round(((node.score || 0) / maxScore) * 100);
+      const score = `${normalizedPct}%`;
       const body = node.body.slice(0, 120).replace(/\n/g, ' ');
-      console.log(`  ${c.cyan}${score}${c.reset}${tags}`);
+      console.log(`  ${c.cyan}${score.padEnd(5)}${c.reset}${tags}`);
       console.log(`  ${body}\n`);
     }
     return;
