@@ -35,12 +35,14 @@ const bold = (s: string) => `${c.bold}${s}${c.reset}`;
 // ─── Arg parser ───────────────────────────────────────────────────────────────
 
 interface ParsedArgs {
-  command?: 'init' | 'update' | 'config' | 'status' | 'serve' | 'help' | 'version' | 'skills';
+  command?: 'init' | 'update' | 'config' | 'status' | 'serve' | 'help' | 'version' | 'skills' | 'engram';
   configSubcmd?: 'set' | 'reset' | 'show';
   configKey?: string;
   configValue?: string;
   skillsSubcmd?: 'list' | 'view' | 'add' | 'delete';
   skillsName?: string;
+  engramSubcmd?: 'stats' | 'search' | 'list' | 'add';
+  engramArg?: string;
   prompt?: string;
   autoApprove: boolean;
   concise: boolean;
@@ -90,6 +92,23 @@ function parseArgs(argv: string[]): ParsedArgs {
         result.skillsName = args[i + 2];
       } else {
         result.skillsSubcmd = 'list';
+      }
+      break;
+    }
+
+    if (arg === 'engram') {
+      result.command = 'engram';
+      const sub = args[i + 1];
+      if (sub === 'search') {
+        result.engramSubcmd = 'search';
+        result.engramArg = args[i + 2];
+      } else if (sub === 'list') {
+        result.engramSubcmd = 'list';
+      } else if (sub === 'add') {
+        result.engramSubcmd = 'add';
+        result.engramArg = args.slice(i + 2).join(' ');
+      } else {
+        result.engramSubcmd = 'stats';
       }
       break;
     }
@@ -639,6 +658,99 @@ Run ${c.cyan}grain --help${c.reset} for all commands.
 `);
 }
 
+// ─── Engram handler ───────────────────────────────────────────────────────────
+
+const ENGRAM_API = 'http://localhost:7474';
+
+async function handleEngram(subcmd?: string, arg?: string): Promise<void> {
+  // Check server is up
+  try {
+    const health = await fetch(`${ENGRAM_API}/health`, { signal: AbortSignal.timeout(1000) });
+    if (!health.ok) throw new Error('not ok');
+  } catch {
+    console.error(`${err} engram server not running at ${ENGRAM_API}`);
+    console.log(dim('  Run: grain init  (auto-starts engram)'));
+    return;
+  }
+
+  if (!subcmd || subcmd === 'stats') {
+    const [statsRes, nodesRes] = await Promise.all([
+      fetch(`${ENGRAM_API}/stats`).then(r => r.json()) as Promise<any>,
+      fetch(`${ENGRAM_API}/nodes?limit=100`).then(r => r.json()) as Promise<any[]>,
+    ]);
+
+    // Count tags across all nodes
+    const tagCounts: Record<string, number> = {};
+    for (const node of nodesRes) {
+      for (const tag of (node.tags || [])) {
+        tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+      }
+    }
+    const topTags = Object.entries(tagCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+
+    console.log(`\n${bold('engram stats')}\n`);
+    console.log(`  ${bold('Nodes')}    ${c.cyan}${statsRes.nodes}${c.reset}  ${dim(`(${statsRes.fts_docs} indexed, ${statsRes.vectors} vectors)`)}`);
+    console.log(`  ${bold('Edges')}    ${c.cyan}${statsRes.edges}${c.reset}`);
+    if (statsRes.object_bytes) {
+      console.log(`  ${bold('Storage')}  ${dim(`${(statsRes.object_bytes / 1024).toFixed(0)} KB`)}`);
+    }
+    if (topTags.length > 0) {
+      console.log(`\n  ${bold('Top Tags')}`);
+      for (const [tag, count] of topTags) {
+        const bar = '█'.repeat(Math.min(count, 20));
+        console.log(`  ${c.cyan}${tag.padEnd(20)}${c.reset} ${dim(bar)} ${count}`);
+      }
+    }
+    console.log('');
+    return;
+  }
+
+  if (subcmd === 'list') {
+    const nodes = await fetch(`${ENGRAM_API}/nodes?limit=20`).then(r => r.json()) as any[];
+    if (!nodes.length) { console.log(dim('No nodes in engram.')); return; }
+    console.log(`\n${bold('Recent nodes')} ${dim('(latest 20)')}\n`);
+    for (const node of nodes) {
+      const tags = node.tags?.length ? dim(` [${node.tags.join(', ')}]`) : '';
+      const body = node.body.slice(0, 80).replace(/\n/g, ' ');
+      console.log(`  ${c.cyan}${node.id.slice(-8)}${c.reset}${tags}`);
+      console.log(`  ${dim(body)}`);
+    }
+    console.log('');
+    return;
+  }
+
+  if (subcmd === 'search') {
+    if (!arg) { console.error(`${err} Usage: grain engram search <query>`); return; }
+    const res = await fetch(`${ENGRAM_API}/search?q=${encodeURIComponent(arg)}&limit=10`).then(r => r.json()) as any[];
+    if (!res.length) { console.log(dim(`No results for "${arg}"`)); return; }
+    console.log(`\n${bold(`engram search: "${arg}"`)}\n`);
+    for (const node of res) {
+      const tags = node.tags?.length ? dim(` [${node.tags.join(', ')}]`) : '';
+      const score = `${(node.score * 100).toFixed(0)}%`;
+      const body = node.body.slice(0, 120).replace(/\n/g, ' ');
+      console.log(`  ${c.cyan}${score}${c.reset}${tags}`);
+      console.log(`  ${body}\n`);
+    }
+    return;
+  }
+
+  if (subcmd === 'add') {
+    if (!arg) { console.error(`${err} Usage: grain engram add <fact>`); return; }
+    const res = await fetch(`${ENGRAM_API}/add`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body: arg, tags: ['manual'], node_type: 'fact' }),
+    }).then(r => r.json()) as any;
+    console.log(`${ok} Stored: ${c.cyan}${res.id}${c.reset}`);
+    return;
+  }
+
+  console.error(`${err} Unknown subcommand: ${subcmd}`);
+  console.log(`Usage: grain engram [stats|list|search <query>|add <fact>]`);
+}
+
 // ─── Skills handler ───────────────────────────────────────────────────────────
 
 async function handleSkills(subcmd?: string, name?: string): Promise<void> {
@@ -740,6 +852,7 @@ async function main(): Promise<void> {
   if (parsed.command === 'init')    { await handleInit(); return; }
   if (parsed.command === 'status')  { await handleStatus(); return; }
   if (parsed.command === 'skills')  { await handleSkills(parsed.skillsSubcmd, parsed.skillsName); return; }
+  if (parsed.command === 'engram')  { await handleEngram(parsed.engramSubcmd, parsed.engramArg); return; }
 
   if (parsed.command === 'config') {
     handleConfig(parsed.configSubcmd, parsed.configKey, parsed.configValue);
