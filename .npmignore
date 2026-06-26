@@ -1,0 +1,32 @@
+# Source files (ship dist/ only)
+src/
+
+# Tests
+*.test.ts
+*.test.tsx
+test-*
+coverage/
+
+# Documentation (except README)
+*.md
+!README.md
+
+# Development files
+.gitignore
+.github/
+.vscode/
+.idea/
+tsconfig.json
+bun.lock
+
+# Logs and temp
+*.log
+*.tmp
+.DS_Store
+
+# Environment
+.env
+.env.*
+
+# User data (don't ship ~/.grain/)
+~/.grain/

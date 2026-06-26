@@ -1,0 +1,60 @@
+{
+  "id": "fix-typescript-detection-bug",
+  "name": "Fix TypeScript Detection Bug",
+  "description": "Diagnose and fix issues where TypeScript isn't properly detected in projects, particularly when workspace_scan returns undefined languageTypes. Involves checking project structure, package.json, tsconfig.json, and implementing proper type guards.",
+  "pattern": {
+    "regex": [
+      "typescript.*not.*detect",
+      "languageTypes.*undefined",
+      "workspace.*scan.*typescript"
+    ],
+    "keywords": [
+      "typescript detection",
+      "languageTypes undefined",
+      "workspace scan typescript",
+      "typescript not detected",
+      "project type detection"
+    ],
+    "semantic": "typescript detection failing undefined languageTypes workspace scan bug"
+  },
+  "approach": "## Approach\n\n1. **Reproduce the Issue**\n   - Create test environment with TypeScript project structure\n   - Run workspace_scan and verify the bug\n   - Confirm languageTypes is undefined\n\n2. **Investigate Root Cause**\n   - Check workspace_scan implementation\n   - Look for type guards and null checks\n   - Identify where languageTypes should be set\n\n3. **Implement the Fix**\n   - Add proper type guards (hasOwnProperty checks)\n   - Ensure fallback to empty array if undefined\n   - Handle edge cases (no package.json, etc.)\n\n4. **Test the Fix**\n   - Re-run workspace_scan in test environment\n   - Verify TypeScript is properly detected\n   - Check edge cases and error conditions\n\n5. **Document and Learn**\n   - Document the pattern for future reference\n   - Add to skills library",
+  "code": [
+    "// Type guard for checking properties",
+    "if (result.hasOwnProperty('languageTypes') && Array.isArray(result.languageTypes)) {",
+    "  // Safe to use result.languageTypes",
+    "}",
+    "",
+    "// Fallback pattern",
+    "const languages = result?.languageTypes ?? [];",
+    "",
+    "// Complete fix in workspace_scan:",
+    "if (hasOwnProperty.call(result, 'languageTypes') && Array.isArray(result.languageTypes)) {",
+    "  if (result.languageTypes.includes('typescript')) {",
+    "    renderer.info('TypeScript project detected');",
+    "  }",
+    "}"
+  ],
+  "examples": [
+    {
+      "problem": "workspace_scan was returning project info but languageTypes was undefined, causing TypeScript detection to fail with 'Cannot read property includes of undefined' error",
+      "execution": "1. Created test TypeScript project with package.json and tsconfig.json\n2. Identified missing type guard in workspace_scan tool\n3. Added hasOwnProperty check before accessing languageTypes\n4. Added fallback to empty array\n5. Tested fix with multiple project types",
+      "outcome": "Successfully fixed TypeScript detection. workspace_scan now safely checks for languageTypes array and properly detects TypeScript projects. Error eliminated and detection works across all project types.",
+      "timestamp": "2024-06-25T13:30:00Z"
+    }
+  ],
+  "metadata": {
+    "times_used": 1,
+    "success_rate": 1.0,
+    "created_at": "2024-06-25T13:30:00Z",
+    "updated_at": "2024-06-25T13:30:00Z",
+    "tags": [
+      "typescript",
+      "debugging",
+      "type-safety",
+      "workspace-scan",
+      "bug-fix",
+      "type-guard"
+    ],
+    "complexity": 3
+  }
+}

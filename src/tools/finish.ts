@@ -15,10 +15,14 @@ export const finishTool = {
 };
 
 export async function executeFinish(input: { result: string; learnings?: string[] }): Promise<ToolResult> {
-  // Store learnings in engram if provided
+  // Store learnings in engram if provided — don't let engram failure block task completion
   if (input.learnings && input.learnings.length > 0) {
     for (const learning of input.learnings) {
-      await executeEngram({ action: 'add', body: learning, tags: ['auto-learned'] });
+      try {
+        await executeEngram({ action: 'add', body: learning, tags: ['auto-learned'] });
+      } catch (_err) {
+        // Engram unavailable — skip, don't fail
+      }
     }
   }
 

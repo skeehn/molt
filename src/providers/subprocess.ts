@@ -53,15 +53,21 @@ export async function delegateToClaudeCode(prompt: string): Promise<SubprocessRe
 
 export async function delegateToCodex(prompt: string): Promise<SubprocessResult> {
   return new Promise((resolve, reject) => {
-    const proc = spawn('codex', ['--approval-mode', 'full-auto', '-q', prompt], {
+    // codex 0.135.0 - use exec mode
+    // Note: codex exec can be slow (10-30s typical)
+    const proc = spawn('codex', ['exec', '--dangerously-bypass-approvals-and-sandbox', prompt], {
       stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 120000, // 2 minute timeout
     });
 
     let output = '';
     let stderr = '';
 
     proc.stdout.on('data', (data: Buffer) => {
-      output += data.toString();
+      const text = data.toString();
+      output += text;
+      // Parse codex output - look for the actual response after session info
+      // Codex format: "session id: ...\n--------\nuser\n[prompt]\ncodex\n[response]\ntokens used\n..."
     });
 
     proc.stderr.on('data', (data: Buffer) => {
@@ -69,7 +75,19 @@ export async function delegateToCodex(prompt: string): Promise<SubprocessResult>
     });
 
     proc.on('close', (code) => {
-      resolve({ output: output || stderr, exitCode: code || 0 });
+      // Extract just the codex response from output
+      const lines = output.split('\n');
+      const codexIndex = lines.findIndex(l => l.trim() === 'codex');
+      const tokensIndex = lines.findIndex(l => l.startsWith('tokens used'));
+      
+      let response = '';
+      if (codexIndex !== -1 && tokensIndex !== -1) {
+        response = lines.slice(codexIndex + 1, tokensIndex).join('\n').trim();
+      } else {
+        response = output; // Fallback to full output
+      }
+      
+      resolve({ output: response || output || stderr, exitCode: code || 0 });
     });
 
     proc.on('error', (err) => {

@@ -1,11 +1,16 @@
-import type { Message, ContentBlock, StreamEvent } from '../providers/types.js';
+// Agent loop - fluid execution with streaming, error recovery, and quality control
+import type { Message, ContentBlock } from '../providers/types.js';
 import { getProvider } from '../providers/index.js';
 import { TOOLS, executeTool } from '../tools/index.js';
+import { classifyTaskComplexity, routeModel, explainRouting } from '../router/index.js';
+import { trackToolCall, getContextSummary } from './context-tracker.js';
 import { getSystemPrompt } from '../system-prompt.js';
 import { loadConfig } from '../config.js';
 import { createSession, addMessage, getMessages, getLastSession } from '../session/store.js';
 import { needsCompaction, compact, engramRetrieve, engramStore } from './context.js';
 import * as renderer from '../tui/renderer.js';
+import { getSkillManager } from '../skills/manager.js';
+import type { SkillMatch } from '../skills/types.js';
 
 export interface AgentOpts {
   prompt?: string;
@@ -13,64 +18,104 @@ export interface AgentOpts {
   model?: string;
   provider?: string;
   oneShot?: boolean;
+  autoApprove?: boolean;
+  concise?: boolean;
 }
+
+const MAX_TURNS = 30; // Safety limit to prevent infinite loops
 
 export async function agentLoop(opts: AgentOpts): Promise<void> {
   const config = loadConfig();
-  const providerName = opts.provider || config.provider;
-  const modelName = opts.model || config.model || undefined;
-  const provider = getProvider(providerName, modelName);
+  const skillManager = getSkillManager();
+  await skillManager.initialize();
 
+  // Model routing
+  let providerName = opts.provider || config.provider;
+  let modelName = opts.model || config.model || undefined;
+
+  if (!opts.model && !opts.provider && opts.prompt) {
+    const complexity = classifyTaskComplexity(opts.prompt);
+    const modelConfig = routeModel(complexity);
+    providerName = modelConfig.provider;
+    modelName = modelConfig.model;
+    renderer.info(`🧠 ${explainRouting(complexity, modelConfig)}`);
+  }
+
+  const provider = getProvider(providerName, modelName);
   renderer.info(`Using ${provider.name} / ${provider.model}`);
 
-  // 1. Load or create session
+  // Session management
   let sessionId: string;
   let messages: Message[] = [];
 
   if (opts.resume) {
-    const last = getLastSession();
+    const last = await getLastSession();
     if (last) {
-      sessionId = last.id;
-      messages = getMessages(sessionId);
-      renderer.info(`Resumed session: ${last.title}`);
+      sessionId = last;
+      messages = await getMessages(sessionId);
+      renderer.info('Resumed session');
     } else {
-      sessionId = createSession();
-      renderer.info('No previous session found, starting new.');
+      sessionId = await createSession();
     }
   } else {
-    sessionId = createSession();
+    sessionId = await createSession();
   }
 
-  // If one-shot with prompt
+  // Get initial prompt
   if (opts.prompt) {
     messages.push({ role: 'user', content: [{ type: 'text', text: opts.prompt }] });
-    addMessage(sessionId, 'user', [{ type: 'text', text: opts.prompt }]);
+    await addMessage(sessionId, 'user', [{ type: 'text', text: opts.prompt }]);
   } else if (messages.length === 0) {
-    // Interactive: get first prompt
     const input = await renderer.userPrompt();
     if (!input.trim()) {
-      renderer.info('Goodbye!');
-      return;
+      renderer.info('Type a command to get started, or Ctrl+C to exit.');
+      return agentLoop(opts);
     }
     messages.push({ role: 'user', content: [{ type: 'text', text: input }] });
     addMessage(sessionId, 'user', [{ type: 'text', text: input }]);
   }
 
-  // Stall detection state
-  const toolCallHistory: Array<{ name: string; args: string }> = [];
+  // Main agent loop - fluid execution
+  let turnCount = 0;
 
-  // Main loop
-  while (true) {
-    // 2. Engram context injection
-    let system = getSystemPrompt();
-    const lastUserMsg = messages[messages.length - 1];
-    if (lastUserMsg?.role === 'user') {
+  while (turnCount < MAX_TURNS) {
+    turnCount++;
+
+    // Build system prompt with context + skills
+    let system = getSystemPrompt(opts.concise);
+
+    const contextSummary = getContextSummary();
+    if (contextSummary) {
+      system += `\n\n## Session Context\n${contextSummary}`;
+    }
+
+    // Skill matching on user messages
+    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user' && m.content.some(b => b.type === 'text'));
+    let matchedSkills: SkillMatch[] = [];
+
+    if (lastUserMsg) {
       const userText = lastUserMsg.content
         .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
         .map(b => b.text)
         .join(' ');
 
-      if (userText) {
+      if (userText && turnCount === 1) {
+        matchedSkills = await skillManager.matchSkills(userText, 0.6);
+
+        if (matchedSkills.length > 0) {
+          system += `\n\n## Relevant Skills\n`;
+          for (const match of matchedSkills.slice(0, 3)) {
+            system += `### ${match.skill.name} (${(match.confidence * 100).toFixed(0)}% match)\n`;
+            system += `${match.skill.description}\n\n`;
+            system += `**Approach:**\n${match.skill.approach}\n\n`;
+            if (match.skill.code && match.skill.code.length > 0) {
+              system += `**Code patterns:**\n\`\`\`\n${match.skill.code.join('\n')}\n\`\`\`\n\n`;
+            }
+          }
+          renderer.info(`💡 Skills: ${matchedSkills.slice(0, 3).map(m => m.skill.name).join(', ')}`);
+        }
+
+        // Engram context
         const engramContext = await engramRetrieve(userText);
         if (engramContext.trim()) {
           system += `\n\nRelevant context from memory:\n${engramContext}`;
@@ -81,173 +126,205 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
     // Context compaction
     if (needsCompaction(messages)) {
       messages = compact(messages);
-      renderer.warn('Context compacted to fit window.');
+      renderer.warn('Context compacted.');
     }
 
-    // 3. Stream LLM response
-    const spin = renderer.spinner();
+    // Stream LLM response
+    const spin = renderer.spinner('Thinking...');
     const assistantBlocks: ContentBlock[] = [];
     let currentToolId = '';
-    let currentToolName = '';
-    let currentToolInput = '';
+    let currentToolInputJson = '';
+    const toolInputJsonMap = new Map<string, string>();
     let hasToolUse = false;
     let textBuffer = '';
     let spinnerStopped = false;
 
     try {
+      const STREAM_TIMEOUT = 90000; // 90s inactivity (large files take time)
+      let lastEventTime = Date.now();
+      let timedOut = false;
+
+      const streamTimeout = setInterval(() => {
+        if (Date.now() - lastEventTime > STREAM_TIMEOUT) {
+          clearInterval(streamTimeout);
+          timedOut = true;
+        }
+      }, 5000);
+
       for await (const event of provider.stream(messages, system, TOOLS)) {
+        if (timedOut) break;
+        lastEventTime = Date.now();
         if (event.type === 'text_delta') {
-          if (!spinnerStopped) {
-            renderer.stopSpinner();
-            spinnerStopped = true;
-          }
-          renderer.streamText(event.text);
+          if (!spinnerStopped) { spin.stop(); renderer.clearLine(); spinnerStopped = true; }
           textBuffer += event.text;
+          renderer.stream(event.text);
         } else if (event.type === 'tool_use_start') {
-          if (!spinnerStopped) {
-            renderer.stopSpinner();
-            spinnerStopped = true;
-          }
           hasToolUse = true;
           currentToolId = event.id;
-          currentToolName = event.name;
-          currentToolInput = '';
-
-          // Flush text buffer as a block
-          if (textBuffer) {
-            assistantBlocks.push({ type: 'text', text: textBuffer });
-            textBuffer = '';
-          }
+          currentToolInputJson = '';
+          toolInputJsonMap.set(event.id, '');
+          assistantBlocks.push({
+            type: 'tool_use',
+            id: event.id,
+            name: event.name,
+            input: {},
+          });
+          if (!spinnerStopped) { spin.stop(); renderer.clearLine(); spinnerStopped = true; }
+          renderer.tool(event.name, { _streaming: true });
         } else if (event.type === 'tool_use_delta') {
-          currentToolInput += event.input_json;
+          currentToolInputJson += event.input_json;
+          toolInputJsonMap.set(currentToolId, currentToolInputJson);
+          lastEventTime = Date.now(); // reset timer during large file writes
         } else if (event.type === 'tool_use_end') {
-          if (currentToolName) {
-            let parsedInput: any = {};
-            try { parsedInput = JSON.parse(currentToolInput); } catch {}
-            assistantBlocks.push({
-              type: 'tool_use',
-              id: currentToolId,
-              name: currentToolName,
-              input: parsedInput,
-            });
-            renderer.toolStart(currentToolName, parsedInput);
-            currentToolName = '';
+          const jsonStr = toolInputJsonMap.get(currentToolId) || currentToolInputJson;
+          if (jsonStr) {
+            try {
+              const parsed = JSON.parse(jsonStr);
+              const block = assistantBlocks.find(b => b.type === 'tool_use' && b.id === currentToolId) as any;
+              if (block) {
+                block.input = parsed;
+                // Overwrite the "⚡ write..." line with full details now that we have input
+                const summary = block.name === 'write' && parsed.path
+                  ? `${parsed.path} (${parsed.content ? Buffer.byteLength(parsed.content, 'utf8') : 0} bytes)`
+                  : block.name === 'bash' ? (parsed.command?.slice(0, 80) || '')
+                  : block.name === 'read' ? (parsed.path || '')
+                  : block.name === 'patch' ? (parsed.path || '')
+                  : '';
+                if (summary) {
+                  renderer.dim(`  → ${summary}`);
+                }
+              }
+            } catch (err) {
+              renderer.warn(`Failed to parse tool input: ${err}`);
+            }
           }
-        } else if (event.type === 'message_end') {
-          // Flush remaining text
-          if (textBuffer) {
-            assistantBlocks.push({ type: 'text', text: textBuffer });
-            textBuffer = '';
-          }
-        } else if (event.type === 'error') {
-          if (!spinnerStopped) {
-            renderer.stopSpinner();
-            spinnerStopped = true;
-          }
-          renderer.error(event.error);
-          return;
         }
       }
-    } catch (err: any) {
-      if (!spinnerStopped) {
-        renderer.stopSpinner();
+
+      if (timedOut) {
+        renderer.warn('LLM stream timed out (90s no activity). Model may be overloaded — try again.');
       }
-      renderer.error(`Provider error: ${err.message}`);
-      return;
-    }
 
-    if (!spinnerStopped) {
-      renderer.stopSpinner();
-    }
-    renderer.newLine();
+      if (!spinnerStopped) spin.stop();
+      clearInterval(streamTimeout);
+      if (textBuffer) {
+        assistantBlocks.unshift({ type: 'text', text: textBuffer });
+      }
+      renderer.newLine();
 
-    // Flush any remaining text
-    if (textBuffer) {
-      assistantBlocks.push({ type: 'text', text: textBuffer });
-    }
+      // If no tool calls, this is a final text response
+      if (!hasToolUse) {
+        messages.push({ role: 'assistant', content: assistantBlocks });
+        addMessage(sessionId, 'assistant', assistantBlocks);
 
-    // Save assistant message
-    if (assistantBlocks.length > 0) {
-      messages.push({ role: 'assistant', content: assistantBlocks });
-      addMessage(sessionId, 'assistant', assistantBlocks);
-    }
+        if (opts.oneShot) return;
 
-    // 4. Execute tools
-    if (hasToolUse) {
+        // Interactive: wait for next input
+        renderer.newLine();
+        const nextInput = await renderer.userPrompt();
+        if (!nextInput.trim()) continue;
+        messages.push({ role: 'user', content: [{ type: 'text', text: nextInput }] });
+        addMessage(sessionId, 'user', [{ type: 'text', text: nextInput }]);
+        turnCount = 0; // Reset turn counter for new user request
+        continue;
+      }
+
+      // Execute tools
       const toolResults: ContentBlock[] = [];
+      let finishCalled = false;
 
       for (const block of assistantBlocks) {
         if (block.type !== 'tool_use') continue;
 
-        // 6. Stall detection
-        const callSig = JSON.stringify({ name: block.name, args: block.input });
-        toolCallHistory.push({ name: block.name, args: JSON.stringify(block.input) });
-        const recentSame = toolCallHistory.slice(-3).filter(t => t.name === block.name && t.args === JSON.stringify(block.input));
-        if (recentSame.length >= 3) {
-          renderer.warn('Stall detected: same tool called 3x with same args. Injecting nudge.');
+        if (block.name === 'finish') {
+          const msg = block.input?.message || 'Task complete.';
+          renderer.success(`✓ ${msg}`);
+          finishCalled = true;
+
+          // Record skill success
+          if (matchedSkills.length > 0) {
+            const topSkill = matchedSkills[0];
+            await skillManager.recordExecution(topSkill.skill.id, true, {
+              problem: opts.prompt || 'task',
+              execution: assistantBlocks.filter(b => b.type === 'tool_use').map((b: any) => b.name).join(' → '),
+              outcome: msg,
+            });
+          }
+
           toolResults.push({
             type: 'tool_result',
             tool_use_id: block.id,
-            content: 'STALL DETECTED: You have called this tool 3 times with identical arguments. Try a different approach or use a different tool.',
-            is_error: true,
+            content: msg,
+            is_error: false,
           });
-          continue;
-        }
-
-        // 7. Handle finish tool
-        if (block.name === 'finish') {
-          const result = await executeTool('finish', block.input);
-          renderer.toolResult(result.content);
-
-          // Auto-learn
-          if (block.input?.learnings) {
-            for (const learning of block.input.learnings) {
-              await engramStore(learning);
-            }
-          }
-
-          if (opts.oneShot) return;
-
-          // In interactive mode, continue after finish
-          renderer.info('Task marked complete.');
-          const nextInput = await renderer.userPrompt();
-          if (!nextInput.trim()) return;
-          messages.push({ role: 'user', content: [{ type: 'text', text: nextInput }] });
-          addMessage(sessionId, 'user', [{ type: 'text', text: nextInput }]);
-          continue;
+          break;
         }
 
         // Execute the tool
         const result = await executeTool(block.name, block.input);
-        renderer.toolResult(result.content, result.is_error);
+        trackToolCall(block.name, block.input, result);
+
+        const resultContent = typeof result.content === 'string'
+          ? result.content
+          : JSON.stringify(result.content);
+
+        // Show result (truncated for display)
+        const displayContent = resultContent.length > 500
+          ? resultContent.slice(0, 500) + `\n... (${resultContent.length} chars total)`
+          : resultContent;
+        renderer.result(displayContent, result.is_error);
+
         toolResults.push({
           type: 'tool_result',
           tool_use_id: block.id,
-          content: result.content,
+          content: resultContent,
           is_error: result.is_error,
         });
       }
+
+      // Push messages
+      messages.push({ role: 'assistant', content: assistantBlocks });
+      addMessage(sessionId, 'assistant', assistantBlocks);
 
       if (toolResults.length > 0) {
         messages.push({ role: 'user', content: toolResults });
         addMessage(sessionId, 'user', toolResults);
       }
 
-      // Continue the loop to get next LLM response
-      continue;
+      // If finish was called, handle exit or next input
+      if (finishCalled) {
+        if (opts.oneShot) return;
+
+        renderer.newLine();
+        const nextInput = await renderer.userPrompt();
+        if (!nextInput.trim()) continue;
+        messages = []; // Fresh context for new task
+        messages.push({ role: 'user', content: [{ type: 'text', text: nextInput }] });
+        addMessage(sessionId, 'user', [{ type: 'text', text: nextInput }]);
+        turnCount = 0;
+        continue;
+      }
+
+      // Otherwise, loop back to LLM with tool results (fluid execution)
+      // The LLM will decide: more tools? done? ask user?
+
+    } catch (err: any) {
+      if (!spinnerStopped) spin.stop();
+      renderer.error(err.message);
+      await engramStore(`Error: ${err.message}`, ['error']);
+
+      if (opts.oneShot) throw err;
+
+      renderer.newLine();
+      const retry = await renderer.userPrompt('Try again? ');
+      if (!retry.trim() || retry.toLowerCase() === 'n') break;
+      turnCount = 0;
     }
-
-    // 5. No tool use: wait for next user input
-    if (opts.oneShot) return;
-
-    const userInput = await renderer.userPrompt();
-    if (!userInput.trim()) {
-      // Empty input in interactive mode - exit gracefully
-      renderer.info('Goodbye!');
-      return;
-    }
-
-    messages.push({ role: 'user', content: [{ type: 'text', text: userInput }] });
-    addMessage(sessionId, 'user', [{ type: 'text', text: userInput }]);
   }
+
+  if (turnCount >= MAX_TURNS) {
+    renderer.warn(`Reached ${MAX_TURNS} turn limit. Use a more specific prompt or break into smaller tasks.`);
+  }
+
+  renderer.info('Goodbye!');
 }

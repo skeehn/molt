@@ -93,8 +93,8 @@ export class OpenRouterProvider implements Provider {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.apiKey}`,
-        'HTTP-Referer': 'https://github.com/molt-agent',
-        'X-Title': 'molt',
+        'HTTP-Referer': 'https://github.com/grain-agent',
+        'X-Title': 'grain',
       },
       body: JSON.stringify(body),
     });

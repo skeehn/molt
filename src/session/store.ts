@@ -1,87 +1,113 @@
-import { Database } from 'bun:sqlite';
+// Session store - simple JSON file (fast, no native deps, no WASM)
 import { join } from 'path';
-import { mkdirSync, existsSync } from 'fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { randomUUID } from 'crypto';
 import type { Message } from '../providers/types.js';
 
-const DB_DIR = join(homedir(), '.molt');
-const DB_PATH = join(DB_DIR, 'sessions.db');
+const DB_DIR = join(homedir(), '.grain');
+const DB_PATH = join(DB_DIR, 'sessions.json');
 
-let db: Database | null = null;
+interface SessionRecord {
+  id: string;
+  title: string | null;
+  messages: Array<{ id: string; role: string; content_json: string; created_at: string }>;
+  created_at: string;
+  updated_at: string;
+}
 
-function getDb(): Database {
-  if (db) return db;
+interface SessionStore {
+  sessions: SessionRecord[];
+}
+
+let store: SessionStore | null = null;
+
+function getStore(): SessionStore {
+  if (store) return store;
 
   if (!existsSync(DB_DIR)) {
     mkdirSync(DB_DIR, { recursive: true });
   }
 
-  db = new Database(DB_PATH);
-  db.run('PRAGMA journal_mode = WAL');
+  if (existsSync(DB_PATH)) {
+    try {
+      store = JSON.parse(readFileSync(DB_PATH, 'utf-8'));
+      return store!;
+    } catch {
+      // Corrupted, start fresh
+    }
+  }
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY,
-      title TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
-    )
-  `);
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      role TEXT NOT NULL,
-      content_json TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (session_id) REFERENCES sessions(id)
-    )
-  `);
-
-  db.run(`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)`);
-
-  return db;
+  store = { sessions: [] };
+  return store;
 }
 
-export function createSession(title?: string): string {
+function saveStore() {
+  if (store) {
+    // Keep only last 50 sessions to prevent bloat
+    if (store.sessions.length > 50) {
+      store.sessions = store.sessions.slice(-50);
+    }
+    writeFileSync(DB_PATH, JSON.stringify(store, null, 2));
+  }
+}
+
+export async function createSession(title?: string): Promise<string> {
   const id = randomUUID();
-  const database = getDb();
-  database.prepare('INSERT INTO sessions (id, title) VALUES (?, ?)').run(id, title || 'Untitled');
+  const s = getStore();
+  s.sessions.push({
+    id,
+    title: title || null,
+    messages: [],
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+  saveStore();
   return id;
 }
 
-export function addMessage(sessionId: string, role: string, content: any[]): void {
-  const database = getDb();
-  const id = randomUUID();
-  database.prepare('INSERT INTO messages (id, session_id, role, content_json) VALUES (?, ?, ?, ?)').run(
-    id, sessionId, role, JSON.stringify(content)
-  );
-  database.prepare("UPDATE sessions SET updated_at = datetime('now') WHERE id = ?").run(sessionId);
+export async function addMessage(
+  sessionId: string,
+  role: 'user' | 'assistant',
+  content: Message['content']
+): Promise<void> {
+  const s = getStore();
+  const session = s.sessions.find(sess => sess.id === sessionId);
+  if (!session) return;
+
+  session.messages.push({
+    id: randomUUID(),
+    role,
+    content_json: JSON.stringify(content),
+    created_at: new Date().toISOString(),
+  });
+  session.updated_at = new Date().toISOString();
+
+  // Keep only last 100 messages per session
+  if (session.messages.length > 100) {
+    session.messages = session.messages.slice(-100);
+  }
+
+  saveStore();
 }
 
-export function getMessages(sessionId: string): Message[] {
-  const database = getDb();
-  const rows = database.prepare('SELECT role, content_json FROM messages WHERE session_id = ? ORDER BY created_at').all(sessionId) as any[];
-  return rows.map(row => ({
-    role: row.role as 'user' | 'assistant',
-    content: JSON.parse(row.content_json),
+export async function getMessages(sessionId: string): Promise<Message[]> {
+  const s = getStore();
+  const session = s.sessions.find(sess => sess.id === sessionId);
+  if (!session) return [];
+
+  return session.messages.map(msg => ({
+    role: msg.role as 'user' | 'assistant',
+    content: JSON.parse(msg.content_json),
   }));
 }
 
-export function listSessions(limit = 20): Array<{ id: string; title: string; created_at: string; updated_at: string }> {
-  const database = getDb();
-  return database.prepare('SELECT id, title, created_at, updated_at FROM sessions ORDER BY updated_at DESC LIMIT ?').all(limit) as any[];
-}
-
-export function getLastSession(): { id: string; title: string } | null {
-  const database = getDb();
-  const row = database.prepare('SELECT id, title FROM sessions ORDER BY updated_at DESC LIMIT 1').get() as any;
-  return row || null;
-}
-
-export function updateSessionTitle(sessionId: string, title: string): void {
-  const database = getDb();
-  database.prepare('UPDATE sessions SET title = ? WHERE id = ?').run(title, sessionId);
+export async function getLastSession(): Promise<string | null> {
+  const s = getStore();
+  if (s.sessions.length === 0) return null;
+  // Sort by updated_at descending
+  const sorted = [...s.sessions].sort((a, b) =>
+    new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+  );
+  return sorted[0].id;
 }

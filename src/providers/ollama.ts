@@ -1,103 +1,64 @@
-import type { Provider, Message, Tool, StreamEvent, ContentBlock } from './types.js';
-
-const DEFAULT_MODEL = 'qwen3:32b';
-const BASE_URL = 'http://localhost:11434/api/chat';
+// Ollama provider for local models (free, offline)
+import { spawn } from 'child_process';
+import type { Provider, Message, StreamEvent, Tool } from './types.js';
 
 export class OllamaProvider implements Provider {
   name = 'ollama';
   model: string;
+  baseUrl: string;
 
-  constructor(model?: string) {
-    this.model = model || DEFAULT_MODEL;
-  }
-
-  private convertMessages(messages: Message[], system: string): any[] {
-    const result: any[] = [{ role: 'system', content: system }];
-
-    for (const m of messages) {
-      const textParts: string[] = [];
-      const toolCalls: any[] = [];
-      const toolResults: any[] = [];
-
-      for (const block of m.content) {
-        if (block.type === 'text') {
-          textParts.push(block.text);
-        } else if (block.type === 'tool_use') {
-          toolCalls.push({
-            id: block.id,
-            type: 'function',
-            function: { name: block.name, arguments: JSON.stringify(block.input) }
-          });
-        } else if (block.type === 'tool_result') {
-          toolResults.push({
-            role: 'tool',
-            content: block.content,
-          });
-        }
-      }
-
-      if (toolCalls.length > 0) {
-        // Assistant message with tool calls
-        result.push({
-          role: 'assistant',
-          content: textParts.join('') || '',
-          tool_calls: toolCalls,
-        });
-      } else if (toolResults.length > 0) {
-        // Push any text first if present
-        if (textParts.length > 0) {
-          result.push({ role: m.role, content: textParts.join('\n') });
-        }
-        for (const tr of toolResults) {
-          result.push(tr);
-        }
-      } else if (textParts.length > 0) {
-        result.push({ role: m.role, content: textParts.join('\n') });
-      }
-    }
-
-    return result;
-  }
-
-  private convertTools(tools: Tool[]): any[] {
-    return tools.map(t => ({
-      type: 'function',
-      function: {
-        name: t.name,
-        description: t.description,
-        parameters: t.input_schema,
-      }
-    }));
+  constructor(model: string = 'qwen2.5-coder:32b', baseUrl: string = 'http://localhost:11434') {
+    this.model = model;
+    this.baseUrl = baseUrl;
   }
 
   async *stream(messages: Message[], system: string, tools: Tool[]): AsyncIterable<StreamEvent> {
-    const body: any = {
-      model: this.model,
-      messages: this.convertMessages(messages, system),
-      stream: true,
-    };
+    // Convert messages to Ollama format
+    const ollamaMessages = messages.map(msg => {
+      if (msg.role === 'assistant') {
+        const textBlock = msg.content.find(b => b.type === 'text');
+        return {
+          role: 'assistant',
+          content: textBlock ? (textBlock as any).text : '',
+        };
+      } else {
+        // user messages with tool results
+        const textBlocks = msg.content.filter(b => b.type === 'text' || b.type === 'tool_result');
+        const content = textBlocks.map(b => {
+          if (b.type === 'text') return (b as any).text;
+          if (b.type === 'tool_result') return `Tool result: ${(b as any).content}`;
+          return '';
+        }).join('\n');
+        return { role: 'user', content };
+      }
+    });
 
-    if (tools.length > 0) {
-      body.tools = this.convertTools(tools);
-    }
+    // Add system message
+    ollamaMessages.unshift({ role: 'system', content: system });
 
-    const response = await fetch(BASE_URL, {
+    // Call Ollama API
+    const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        model: this.model,
+        messages: ollamaMessages,
+        stream: true,
+      }),
     });
 
     if (!response.ok) {
-      yield { type: 'error', error: `Ollama error: ${response.status} ${await response.text()}` };
+      yield { type: 'error', error: `Ollama error: ${response.statusText}` };
       return;
     }
 
-    const reader = response.body?.getReader();
-    if (!reader) {
+    if (!response.body) {
       yield { type: 'error', error: 'No response body' };
       return;
     }
 
+    // Parse streaming response
+    const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
 
@@ -111,31 +72,19 @@ export class OllamaProvider implements Provider {
 
       for (const line of lines) {
         if (!line.trim()) continue;
+        
         try {
-          const parsed = JSON.parse(line);
-
-          if (parsed.message?.tool_calls) {
-            for (const tc of parsed.message.tool_calls) {
-              const id = `tool_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-              yield { type: 'tool_use_start', id, name: tc.function.name };
-              yield {
-                type: 'tool_use_delta',
-                id,
-                input_json: typeof tc.function.arguments === 'string'
-                  ? tc.function.arguments
-                  : JSON.stringify(tc.function.arguments)
-              };
-              yield { type: 'tool_use_end', id };
-            }
-          } else if (parsed.message?.content) {
-            yield { type: 'text_delta', text: parsed.message.content };
+          const data = JSON.parse(line);
+          
+          if (data.message?.content) {
+            yield { type: 'text_delta', text: data.message.content };
           }
-
-          if (parsed.done) {
-            yield { type: 'message_end', stop_reason: parsed.message?.tool_calls ? 'tool_use' : 'end_turn' };
+          
+          if (data.done) {
+            yield { type: 'message_end', stop_reason: 'end_turn' };
           }
-        } catch {
-          // Skip malformed JSON
+        } catch (err) {
+          // Skip invalid JSON
         }
       }
     }
