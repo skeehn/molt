@@ -35,10 +35,12 @@ const bold = (s: string) => `${c.bold}${s}${c.reset}`;
 // ─── Arg parser ───────────────────────────────────────────────────────────────
 
 interface ParsedArgs {
-  command?: 'init' | 'update' | 'config' | 'status' | 'serve' | 'help' | 'version';
+  command?: 'init' | 'update' | 'config' | 'status' | 'serve' | 'help' | 'version' | 'skills';
   configSubcmd?: 'set' | 'reset' | 'show';
   configKey?: string;
   configValue?: string;
+  skillsSubcmd?: 'list' | 'view' | 'add' | 'delete';
+  skillsName?: string;
   prompt?: string;
   autoApprove: boolean;
   concise: boolean;
@@ -73,6 +75,21 @@ function parseArgs(argv: string[]): ParsedArgs {
         result.configSubcmd = 'reset';
       } else {
         result.configSubcmd = 'show';
+      }
+      break;
+    }
+
+    if (arg === 'skills') {
+      result.command = 'skills';
+      const sub = args[i + 1];
+      if (sub === 'view' || sub === 'delete') {
+        result.skillsSubcmd = sub;
+        result.skillsName = args[i + 2];
+      } else if (sub === 'add') {
+        result.skillsSubcmd = 'add';
+        result.skillsName = args[i + 2];
+      } else {
+        result.skillsSubcmd = 'list';
       }
       break;
     }
@@ -541,6 +558,11 @@ ${bold('EXAMPLES')}
 ${bold('CONFIG')}    ~/.grain/config.json
 ${bold('KEYS')}      ~/.grain/.env       ${dim('(auto-loaded, never exported to shell)')}
 ${bold('SKILLS')}    ~/.grain/skills/
+
+${bold('grain skills')}               List all skills
+${bold('grain skills view <name>')}   Show a skill's content
+${bold('grain skills add <name>')}    Create a new skill (interactive)
+${bold('grain skills delete <name>')} Remove a skill
 ${bold('LOGS')}      ~/.grain/sessions/
 `);
 }
@@ -581,6 +603,95 @@ Run ${c.cyan}grain --help${c.reset} for all commands.
 `);
 }
 
+// ─── Skills handler ───────────────────────────────────────────────────────────
+
+async function handleSkills(subcmd?: string, name?: string): Promise<void> {
+  const { getSkillManager } = await import('./skills/manager.js');
+  const mgr = getSkillManager();
+  await mgr.initialize();
+
+  if (!subcmd || subcmd === 'list') {
+    const mdSkills  = await mgr.listMarkdownSkills();
+    const jsonSkills = await mgr.getAllJsonSkills();
+
+    if (mdSkills.length === 0 && jsonSkills.length === 0) {
+      console.log(`${dim('No skills found.')} Add one with: ${c.cyan}grain skills add <name>${c.reset}`);
+      console.log(`Skills directory: ${dim(mgr.getSkillsDirectory())}`);
+      return;
+    }
+
+    if (mdSkills.length > 0) {
+      console.log(`\n${bold('Markdown Skills')} ${dim('(~/.grain/skills/*.md)')}`);
+      for (const s of mdSkills) {
+        const tags = s.tags.length > 0 ? dim(` [${s.tags.join(', ')}]`) : '';
+        const desc = s.description ? `  ${dim(s.description)}` : '';
+        console.log(`  ${c.cyan}${s.name}${c.reset}${tags}${desc}`);
+      }
+    }
+
+    if (jsonSkills.length > 0) {
+      console.log(`\n${bold('Learned Patterns')} ${dim('(keyword-matched)')}`);
+      for (const s of jsonSkills) {
+        const rate = `${(s.metadata.success_rate * 100).toFixed(0)}%`;
+        console.log(`  ${c.cyan}${s.name}${c.reset}  ${dim(`used ${s.metadata.times_used}x · ${rate} success`)}`);
+      }
+    }
+    console.log('');
+    return;
+  }
+
+  if (subcmd === 'view') {
+    if (!name) { console.error(`${err} Usage: grain skills view <name>`); return; }
+    const skill = await mgr.getMarkdownSkill(name);
+    if (!skill) { console.error(`${err} Skill not found: ${name}`); return; }
+    console.log(`\n${bold(skill.name)}`);
+    if (skill.description) console.log(dim(skill.description));
+    if (skill.tags.length > 0) console.log(dim(`tags: ${skill.tags.join(', ')}`));
+    console.log(`\n${skill.content}\n`);
+    return;
+  }
+
+  if (subcmd === 'add') {
+    if (!name) { console.error(`${err} Usage: grain skills add <name>`); return; }
+    const iface = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (q: string): Promise<string> => new Promise(r => iface.question(q, r));
+
+    try {
+      const description = await ask(`Description (one line): `);
+      console.log(`Enter skill content (markdown). Type ${c.cyan}EOF${c.reset} on a line by itself to finish:`);
+      const lines: string[] = [];
+      for await (const line of iface) {
+        if (line.trim() === 'EOF') break;
+        lines.push(line);
+      }
+      iface.close();
+      const tagsRaw = await ask(`Tags (comma-separated, optional): `).catch(() => '');
+      const tags = tagsRaw.split(',').map(t => t.trim()).filter(Boolean);
+      const content = lines.join('\n');
+      const skill = await mgr.createMarkdownSkill(name, description, content, tags);
+      console.log(`\n${ok} Created skill: ${c.cyan}${skill.name}${c.reset}`);
+      console.log(dim(`  ${skill.filePath}`));
+    } finally {
+      iface.close();
+    }
+    return;
+  }
+
+  if (subcmd === 'delete') {
+    if (!name) { console.error(`${err} Usage: grain skills delete <name>`); return; }
+    const deleted = await mgr.deleteMarkdownSkill(name);
+    if (deleted) {
+      console.log(`${ok} Deleted skill: ${name}`);
+    } else {
+      console.error(`${err} Skill not found: ${name}`);
+    }
+    return;
+  }
+
+  console.error(`${err} Unknown subcommand: ${subcmd}`);
+  console.log(`Usage: grain skills [list|view <name>|add <name>|delete <name>]`);
+}
+
 // ─── main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -592,6 +703,7 @@ async function main(): Promise<void> {
   if (parsed.command === 'update')  { await handleUpdate(); return; }
   if (parsed.command === 'init')    { await handleInit(); return; }
   if (parsed.command === 'status')  { await handleStatus(); return; }
+  if (parsed.command === 'skills')  { await handleSkills(parsed.skillsSubcmd, parsed.skillsName); return; }
 
   if (parsed.command === 'config') {
     handleConfig(parsed.configSubcmd, parsed.configKey, parsed.configValue);

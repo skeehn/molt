@@ -105,7 +105,17 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
       system += `\n\n## Session Context\n${contextSummary}`;
     }
 
-    // Skill matching on user messages
+    // ── Markdown skills: inject once at turn 1 as permanent context ──────────
+    if (turnCount === 1) {
+      const mdContext = await skillManager.getMarkdownContext();
+      if (mdContext) {
+        system += `\n\n${mdContext}`;
+        const mdCount = (await skillManager.listMarkdownSkills()).length;
+        renderer.info(`💡 Skills: ${mdCount} loaded`);
+      }
+    }
+
+    // ── JSON skills: keyword-matched at turn 1 ────────────────────────────────
     const lastUserMsg = [...messages].reverse().find(m => m.role === 'user' && m.content.some(b => b.type === 'text'));
     let matchedSkills: SkillMatch[] = [];
 
@@ -119,7 +129,7 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
         matchedSkills = await skillManager.matchSkills(userText, 0.6);
 
         if (matchedSkills.length > 0) {
-          system += `\n\n## Relevant Skills\n`;
+          system += `\n\n## Relevant Learned Patterns\n`;
           for (const match of matchedSkills.slice(0, 3)) {
             system += `### ${match.skill.name} (${(match.confidence * 100).toFixed(0)}% match)\n`;
             system += `${match.skill.description}\n\n`;
@@ -128,7 +138,6 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
               system += `**Code patterns:**\n\`\`\`\n${match.skill.code.join('\n')}\n\`\`\`\n\n`;
             }
           }
-          renderer.info(`💡 Skills: ${matchedSkills.slice(0, 3).map(m => m.skill.name).join(', ')}`);
         }
 
         // Engram context
