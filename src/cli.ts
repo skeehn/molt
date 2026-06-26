@@ -890,6 +890,12 @@ async function main(): Promise<void> {
     if (parsed.tbBridge) {
       process.stdout.write(JSON.stringify({ type: 'done' }) + '\n');
     }
+
+    // Force exit in non-TTY mode — readline or other libuv handles
+    // can keep the event loop alive even after all work is done.
+    if (!process.stdin.isTTY) {
+      process.exit(0);
+    }
   } catch (e: any) {
     if (e.message === 'SIGINT') {
       renderer.newLine();
