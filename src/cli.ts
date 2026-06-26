@@ -100,107 +100,169 @@ function ask(question: string): Promise<string> {
   });
 }
 
-async function handleInit(): Promise<void> {
-  console.log('🌾 Welcome to grain!\n');
-  console.log('Let\'s set up your configuration.\n');
+async function testBedrockConnection(): Promise<{ ok: boolean; model: string; error?: string }> {
+  // Make a real minimal API call to verify credentials work
+  const model = 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
+  try {
+    const region = process.env.AWS_REGION || 'us-east-1';
+    const { BedrockRuntimeClient, InvokeModelCommand } = await import('@aws-sdk/client-bedrock-runtime');
+    const client = new BedrockRuntimeClient({ region });
+    const body = JSON.stringify({
+      anthropic_version: 'bedrock-2023-05-31',
+      max_tokens: 16,
+      messages: [{ role: 'user', content: 'ping' }],
+    });
+    await client.send(new InvokeModelCommand({ modelId: model, body, contentType: 'application/json', accept: 'application/json' }));
+    return { ok: true, model };
+  } catch (err: any) {
+    return { ok: false, model, error: err.message?.split('\n')[0] };
+  }
+}
 
-  // Check for existing config
+function checkEngramInstalled(): { installed: boolean; path: string } {
+  const engramPath = join(homedir(), 'bin', 'engram');
+  return { installed: existsSync(engramPath), path: engramPath };
+}
+
+async function handleInit(): Promise<void> {
+  const c = {
+    reset: '\x1b[0m',
+    bold:  '\x1b[1m',
+    cyan:  '\x1b[36m',
+    green: '\x1b[32m',
+    red:   '\x1b[31m',
+    yellow:'\x1b[33m',
+    dim:   '\x1b[2m',
+  };
+
+  console.log(`\n${c.bold}grain init${c.reset}\n`);
+
+  // ── Check existing config ────────────────────────────────────────────────
   const configPath = join(getConfigDir(), 'config.json');
   if (existsSync(configPath)) {
-    console.log('✅ Config already exists at ~/.grain/config.json\n');
     const current = loadConfig();
-    console.log('Current config:');
-    console.log(JSON.stringify(current, null, 2));
-    console.log();
-    const reconfigure = await ask('Reconfigure? (y/n): ');
+    console.log(`Config found at ~/.grain/config.json`);
+    console.log(`  provider:   ${current.provider}`);
+    console.log(`  model:      ${current.model ?? 'auto'}`);
+    console.log(`  engram_db:  ${current.engram_db}\n`);
+    const reconfigure = await ask('Reconfigure? [y/N] ');
     if (reconfigure.toLowerCase() !== 'y') {
-      console.log('\nKeeping existing config.');
-      return;
+      console.log('Keeping existing config.');
+      process.exit(0);
     }
     console.log();
   }
 
-  // Detect available providers
-  console.log('Detecting available providers...\n');
-  const available: Array<{name: string, display: string}> = [];
-  
-  if (checkEnvVar('AWS_REGION')) {
-    available.push({name: 'bedrock', display: 'bedrock (AWS_REGION detected)'});
-  }
-  if (checkEnvVar('ANTHROPIC_API_KEY')) {
-    available.push({name: 'anthropic', display: 'anthropic (ANTHROPIC_API_KEY detected)'});
-  }
-  if (checkEnvVar('OPENROUTER_API_KEY')) {
-    available.push({name: 'openrouter', display: 'openrouter (OPENROUTER_API_KEY detected)'});
-  }
-  available.push({name: 'ollama', display: 'ollama (local, no API key needed)'});
+  // ── Detect providers ─────────────────────────────────────────────────────
+  console.log('Detecting providers...\n');
+  const available: Array<{ name: string; label: string }> = [];
 
-  console.log('Available providers:');
-  available.forEach((p, i) => console.log(`  ${i + 1}. ${p.display}`));
+  const hasAWSRegion  = !!process.env.AWS_REGION;
+  const hasAWSProfile = !!process.env.AWS_PROFILE;
+  const hasAWSKey     = !!process.env.AWS_ACCESS_KEY_ID;
+  if (hasAWSRegion || hasAWSProfile || hasAWSKey) {
+    const hint = hasAWSProfile ? `profile=${process.env.AWS_PROFILE}` : hasAWSKey ? 'key detected' : `region=${process.env.AWS_REGION}`;
+    available.push({ name: 'bedrock', label: `bedrock   (${hint})` });
+  }
+  if (process.env.ANTHROPIC_API_KEY) {
+    available.push({ name: 'anthropic', label: 'anthropic (ANTHROPIC_API_KEY set)' });
+  }
+  if (process.env.OPENROUTER_API_KEY) {
+    available.push({ name: 'openrouter', label: 'openrouter (OPENROUTER_API_KEY set)' });
+  }
+  available.push({ name: 'ollama', label: 'ollama    (local, no key needed)' });
+
+  available.forEach((p, i) => console.log(`  ${i + 1}. ${p.label}`));
   console.log();
 
-  const choice = await ask('Select provider (1-4, or name): ');
-  
-  let provider = '';
+  // ── Pick provider ────────────────────────────────────────────────────────
+  const defaultIdx = 0;
+  const choice = await ask(`Provider [1-${available.length}, default=${available[defaultIdx].name}]: `);
+  let provider = available[defaultIdx].name;
   const choiceNum = parseInt(choice, 10);
   if (!isNaN(choiceNum) && choiceNum >= 1 && choiceNum <= available.length) {
     provider = available[choiceNum - 1].name;
-  } else if (choice.toLowerCase().startsWith('bed')) {
-    provider = 'bedrock';
-  } else if (choice.toLowerCase().startsWith('ant')) {
-    provider = 'anthropic';
-  } else if (choice.toLowerCase().startsWith('open')) {
-    provider = 'openrouter';
-  } else if (choice.toLowerCase().startsWith('olla')) {
-    provider = 'ollama';
-  } else {
-    console.log(`\nUnknown provider: ${choice}`);
-    console.log(`Using default: ${available[0].name}\n`);
-    provider = available[0].name;
+  } else if (choice.trim()) {
+    const match = available.find(p => p.name.startsWith(choice.toLowerCase()));
+    if (match) provider = match.name;
   }
 
-  // Create config
-  const config = {
-    provider,
-    model: null,
-    engram_db: '~/.engram/knowledge',
-    max_tokens: 180000,
-  };
+  console.log(`\nProvider: ${c.bold}${provider}${c.reset}\n`);
 
-  // Validate
-  const validation = validateConfig(config);
-  if (!validation.valid) {
-    console.log(`\n❌ Validation failed:`);
-    console.log(validation.error);
-    console.log('\nPlease set the required environment variables and run "grain init" again.');
-    process.exit(1);
+  // ── Test connection ───────────────────────────────────────────────────────
+  if (provider === 'bedrock') {
+    process.stdout.write('Testing Bedrock connection... ');
+    const result = await testBedrockConnection();
+    if (result.ok) {
+      console.log(`${c.green}ok${c.reset} (${result.model})`);
+    } else {
+      console.log(`${c.red}failed${c.reset}`);
+      console.log(`  ${c.dim}${result.error}${c.reset}`);
+      console.log('\nCheck your AWS credentials (AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)');
+      console.log('or run: aws configure\n');
+      const proceed = await ask('Continue anyway? [y/N] ');
+      if (proceed.toLowerCase() !== 'y') process.exit(1);
+    }
+  } else if (provider === 'anthropic' && !process.env.ANTHROPIC_API_KEY) {
+    const key = await ask('ANTHROPIC_API_KEY: ');
+    if (!key.trim()) { console.log('No key provided. Exiting.'); process.exit(1); }
+    console.log(`\nAdd to your shell profile:\n  export ANTHROPIC_API_KEY=${key}\n`);
   }
 
-  // Save config
+  // ── Save config ──────────────────────────────────────────────────────────
+  const config = { provider, model: null, engram_db: '~/.engram/knowledge', max_tokens: 180000 };
   saveConfig(config);
-  console.log('\n✅ Config saved to ~/.grain/config.json');
-  console.log(JSON.stringify(config, null, 2));
-  
-  // Test connection (simple check)
-  console.log('\n🧪 Testing connection...');
-  try {
-    const testConfig = loadConfig();
-    console.log(`✅ Provider "${testConfig.provider}" configured successfully!`);
-  } catch (err: any) {
-    console.log(`❌ Test failed: ${err.message}`);
+  console.log(`\nConfig saved to ~/.grain/config.json`);
+
+  // ── Set up skills dir ─────────────────────────────────────────────────────
+  const skillsDir = join(homedir(), '.grain', 'skills');
+  if (!existsSync(skillsDir)) {
+    const { mkdirSync } = await import('fs');
+    mkdirSync(skillsDir, { recursive: true });
+    console.log('Created ~/.grain/skills/');
   }
 
-  console.log('\n🎉 Setup complete!\n');
-  console.log('Try these commands:');
-  console.log('  grain "analyze this project"');
-  console.log('  grain "explain architecture"');
-  console.log('  grain --help');
-  console.log('\nTips:');
-  console.log('  - grain learns from every project');
-  console.log('  - Use --concise for terse output');
-  console.log('  - Skills auto-suggest with 💡');
-  console.log('\nConfig: ~/.grain/config.json');
-  console.log('Skills: ~/.grain/skills/\n');
+  // ── Check engram ──────────────────────────────────────────────────────────
+  const engram = checkEngramInstalled();
+  console.log();
+  if (engram.installed) {
+    console.log(`engram: ${c.green}installed${c.reset} (${engram.path})`);
+    // Start the HTTP server in the background if not already running
+    const { execSync } = await import('child_process');
+    try {
+      execSync('curl -sf http://localhost:7474/health > /dev/null 2>&1');
+      console.log(`engram server: ${c.green}already running${c.reset} (http://localhost:7474)`);
+    } catch {
+      try {
+        execSync(`nohup ${engram.path} -d ~/.engram/knowledge serve > /tmp/engram.log 2>&1 &`);
+        await new Promise(r => setTimeout(r, 800));
+        try {
+          execSync('curl -sf http://localhost:7474/health > /dev/null 2>&1');
+          console.log(`engram server: ${c.green}started${c.reset} (http://localhost:7474)`);
+        } catch {
+          console.log(`engram server: ${c.yellow}starting${c.reset} (check /tmp/engram.log if issues)`);
+        }
+      } catch {
+        console.log(`engram server: ${c.yellow}could not start${c.reset} — run manually: engram serve`);
+      }
+    }
+  } else {
+    console.log(`engram: ${c.yellow}not found${c.reset} at ~/bin/engram`);
+    console.log(`  Build it: cd ~/engram && cargo build --release && cp target/release/engram ~/bin/`);
+    console.log(`  grain works without it but won't have persistent memory across sessions.`);
+  }
+
+  // ── Done ──────────────────────────────────────────────────────────────────
+  console.log(`\n${c.bold}Ready.${c.reset}\n`);
+  console.log('Quick start:');
+  console.log(`  ${c.cyan}grain "explain this codebase"${c.reset}`);
+  console.log(`  ${c.cyan}grain --yes "add tests for src/auth.ts"${c.reset}`);
+  console.log(`  ${c.cyan}grain "build a dark site for my SaaS"${c.reset}`);
+  console.log();
+  console.log(`Config:  ~/.grain/config.json`);
+  console.log(`Skills:  ~/.grain/skills/`);
+  console.log(`Logs:    ~/.grain/sessions/`);
+  console.log();
 }
 
 function showWelcomeMessage(): void {
