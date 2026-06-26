@@ -1,5 +1,5 @@
 import type { Tool, ToolResult } from '../providers/types.js';
-import { bashTool, executeBash } from './bash.js';
+import { bashTool, executeBash, destroyShell } from './bash.js';
 import { readTool, executeRead } from './read.js';
 import { writeTool, executeWrite } from './write.js';
 import { patchTool, executePatch } from './patch.js';
@@ -11,7 +11,14 @@ import { workspaceScanTool, executeWorkspaceScan } from './workspace.js';
 import { multiEditTool, executeMultiEdit } from './multi-edit.js';
 import { gitTool, executeGit } from './git.js';
 import { testRunnerTool, executeTestRunner } from './test-runner.js';
+import { testFixLoopTool, executeTestFixLoop } from './test-fix-loop.js';
+import { planTool, executePlan } from './plan.js';
 import { repoMapTool, executeRepoMap } from './repo-map.js';
+
+// Tool execution context — set once at agent loop start
+let _toolCwd: string = process.cwd();
+export function setToolCwd(cwd: string) { _toolCwd = cwd; }
+export { destroyShell };
 
 export const TOOLS: Tool[] = [
   // Core (10) — essential for any coding task
@@ -30,10 +37,12 @@ export const TOOLS: Tool[] = [
   multiEditTool,   // Batch edits across files
   engramTool,      // Persistent memory
   delegateTool,    // Spawn sub-agents
+  testFixLoopTool, // Run tests + return structured failures for fix loop
+  planTool,        // Read/write .grain-plan.json — survives context compaction
 ];
 
 const executors: Record<string, (input: any) => Promise<ToolResult>> = {
-  bash: executeBash,
+  bash: (input: any) => executeBash(input, _toolCwd),
   read: executeRead,
   write: executeWrite,
   patch: executePatch,
@@ -41,11 +50,13 @@ const executors: Record<string, (input: any) => Promise<ToolResult>> = {
   workspace_scan: executeWorkspaceScan,
   git: executeGit,
   run_tests: executeTestRunner,
+  test_fix_loop: (input: any) => executeTestFixLoop(input, _toolCwd),
+  plan: (input: any) => Promise.resolve(executePlan(input, _toolCwd)),
   repo_map: executeRepoMap,
   multi_edit: executeMultiEdit,
   engram: executeEngram,
   delegate: executeDelegate,
-  finish: executeFinish,
+  finish: (input: any) => executeFinish(input, _toolCwd),
 };
 
 export async function executeTool(name: string, input: any): Promise<ToolResult> {

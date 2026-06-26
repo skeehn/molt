@@ -23,29 +23,53 @@ export function needsCompaction(messages: Message[]): boolean {
 }
 
 export function compact(messages: Message[]): Message[] {
-  if (messages.length <= 4) return messages;
+  const KEEP_RECENT = 20;
+  if (messages.length <= KEEP_RECENT) return messages;
 
-  const toSummarize = messages.slice(0, -4);
-  const toKeep = messages.slice(-4);
+  const toSummarize = messages.slice(0, -KEEP_RECENT);
+  const toKeep = messages.slice(-KEEP_RECENT);
 
-  const summaryParts: string[] = [];
+  // Extract structured facts from summarized messages
+  const filesWritten: string[] = [];
+  const commandsRun: string[] = [];
+  const errors: string[] = [];
+  const keyDecisions: string[] = [];
+
   for (const msg of toSummarize) {
     for (const block of msg.content) {
-      if (block.type === 'text') {
-        summaryParts.push(`[${msg.role}]: ${block.text.slice(0, 200)}`);
-      } else if (block.type === 'tool_use') {
-        summaryParts.push(`[tool_use]: ${block.name}(${JSON.stringify(block.input).slice(0, 100)})`);
-      } else if (block.type === 'tool_result') {
-        summaryParts.push(`[tool_result]: ${block.content.slice(0, 100)}`);
+      if (block.type === 'tool_use') {
+        if (block.name === 'write' || block.name === 'multi_edit') {
+          const p = block.input?.path || (block.input?.edits || []).map((e: any) => e.path).join(', ');
+          if (p) filesWritten.push(p);
+        } else if (block.name === 'bash') {
+          const cmd = (block.input?.command || '').slice(0, 80);
+          if (cmd) commandsRun.push(cmd);
+        } else if (block.name === 'finish') {
+          const m = block.input?.message || '';
+          if (m) keyDecisions.push(`COMPLETED: ${m}`);
+        }
+      } else if (block.type === 'tool_result' && (block as any).is_error) {
+        const err = (typeof block.content === 'string' ? block.content : '').slice(0, 120);
+        if (err) errors.push(err);
+      } else if (block.type === 'text' && msg.role === 'assistant') {
+        const text = (block as any).text?.trim() || '';
+        if (text.length > 100 && text.length < 400) keyDecisions.push(text.slice(0, 200));
       }
     }
   }
 
-  const summaryText = `[Context summary - ${toSummarize.length} messages compacted]\n${summaryParts.join('\n')}`;
+  const parts: string[] = [
+    `[CONTEXT SUMMARY — ${toSummarize.length} earlier messages compacted]`,
+  ];
+  if (filesWritten.length) parts.push(`Files written: ${[...new Set(filesWritten)].join(', ')}`);
+  if (commandsRun.length) parts.push(`Commands run: ${[...new Set(commandsRun)].slice(0, 10).join(' | ')}`);
+  if (errors.length) parts.push(`Errors: ${[...new Set(errors)].slice(0, 5).join(' | ')}`);
+  if (keyDecisions.length) parts.push(`Key outcomes:\n${keyDecisions.slice(0, 5).map(d => `  • ${d}`).join('\n')}`);
+  parts.push('[Continue from the recent messages below]');
 
   const summaryMessage: Message = {
     role: 'user',
-    content: [{ type: 'text', text: summaryText }],
+    content: [{ type: 'text', text: parts.join('\n') }],
   };
 
   return [summaryMessage, ...toKeep];

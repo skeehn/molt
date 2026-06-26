@@ -1,7 +1,7 @@
 // Agent loop - fluid execution with streaming, error recovery, and quality control
 import type { Message, ContentBlock } from '../providers/types.js';
 import { getProvider } from '../providers/index.js';
-import { TOOLS, executeTool } from '../tools/index.js';
+import { TOOLS, executeTool, setToolCwd, destroyShell } from '../tools/index.js';
 import { classifyTaskComplexity, routeModel, explainRouting } from '../router/index.js';
 import { trackToolCall, getContextSummary } from './context-tracker.js';
 import { getSystemPrompt } from '../system-prompt.js';
@@ -47,6 +47,9 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
   // Session management
   let sessionId: string;
   let messages: Message[] = [];
+
+  // Init persistent shell cwd to wherever grain was invoked
+  setToolCwd(process.cwd());
 
   if (opts.resume) {
     const last = await getLastSession();
@@ -293,6 +296,7 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
 
       // If finish was called, handle exit or next input
       if (finishCalled) {
+        destroyShell(); // clean up persistent bash session
         if (opts.oneShot) return;
 
         renderer.newLine();
@@ -312,8 +316,18 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
       if (!spinnerStopped) spin.stop();
       renderer.error(err.message);
       await engramStore(`Error: ${err.message}`, ['error']);
+      destroyShell();
 
-      if (opts.oneShot) throw err;
+      if (opts.oneShot) {
+        // Don't crash — log what happened and exit gracefully
+        const isQuota = /429|quota|rate.?limit|throttl/i.test(err.message);
+        if (isQuota) {
+          renderer.warn('Rate limit hit. Partial work saved to session. Run again to continue.');
+        } else {
+          renderer.warn(`Task stopped due to error: ${err.message}`);
+        }
+        return; // graceful exit instead of throw
+      }
 
       renderer.newLine();
       const retry = await renderer.userPrompt('Try again? ');

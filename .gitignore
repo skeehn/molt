@@ -21,8 +21,8 @@ yarn-error.log*
 coverage/
 *.test.ts
 *.test.tsx
-test-*.ts
-test-*.tsx
+test-*.test.ts
+test-*.test.tsx
 
 # TypeScript
 *.tsbuildinfo
