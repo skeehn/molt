@@ -44,6 +44,7 @@ interface ParsedArgs {
   concise: boolean;
   model?: string;
   provider?: string;
+  maxTurns?: number;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -81,6 +82,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     else if (arg === '--concise' || arg === '-c')    { result.concise = true; }
     else if (arg === '--model')                      { result.model = args[++i]; }
     else if (arg === '--provider')                   { result.provider = args[++i]; }
+    else if (arg === '--max-turns')                  { result.maxTurns = parseInt(args[++i], 10); }
     else if (!arg.startsWith('-') && !result.prompt) {
       result.prompt = args.slice(i).join(' ');
       break;
@@ -610,6 +612,7 @@ async function main(): Promise<void> {
       concise:     parsed.concise,
       model:       parsed.model,
       provider:    parsed.provider,
+      maxTurns:    parsed.maxTurns,
     });
   } catch (e: any) {
     if (e.message === 'SIGINT') {

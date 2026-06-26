@@ -7,6 +7,7 @@ export interface OrchestratorOpts {
   concise?: boolean;
   model?: string;
   provider?: string;
+  maxTurns?: number;
 }
 
 export async function orchestrate(opts: OrchestratorOpts): Promise<void> {
@@ -21,5 +22,6 @@ export async function orchestrate(opts: OrchestratorOpts): Promise<void> {
     oneShot: !!opts.prompt,
     autoApprove: opts.autoApprove,
     concise: opts.concise,
+    maxTurns: opts.maxTurns,
   });
 }

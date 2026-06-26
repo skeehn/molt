@@ -20,6 +20,7 @@ export interface AgentOpts {
   oneShot?: boolean;
   autoApprove?: boolean;
   concise?: boolean;
+  maxTurns?: number;  // override default MAX_TURNS (useful for benchmarking)
 }
 
 const MAX_TURNS = 30; // Safety limit to prevent infinite loops
@@ -91,8 +92,9 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
 
   // Main agent loop - fluid execution
   let turnCount = 0;
+  const turnLimit = opts.maxTurns ?? MAX_TURNS;
 
-  while (turnCount < MAX_TURNS) {
+  while (turnCount < turnLimit) {
     turnCount++;
 
     // Build system prompt with context + skills
@@ -350,8 +352,8 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
     }
   }
 
-  if (turnCount >= MAX_TURNS) {
-    renderer.warn(`Reached ${MAX_TURNS} turn limit. Use a more specific prompt or break into smaller tasks.`);
+  if (turnCount >= turnLimit) {
+    renderer.warn(`Reached ${turnLimit} turn limit. Use a more specific prompt or break into smaller tasks.`);
   }
 
   renderer.info('Goodbye!');
