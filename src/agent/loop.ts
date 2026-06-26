@@ -1,15 +1,14 @@
-// Enhanced agent loop with multi-phase execution
+// Agent loop - fluid execution with streaming, error recovery, and quality control
 import type { Message, ContentBlock } from '../providers/types.js';
 import { getProvider } from '../providers/index.js';
 import { TOOLS, executeTool } from '../tools/index.js';
-import { classifyTaskComplexity, routeModel, explainRouting, estimateCost } from '../router/index.js';
-import { loadSessionContext, saveSessionContext, trackToolCall, getContextSummary, resolveFileReference } from './context-tracker.js';
+import { classifyTaskComplexity, routeModel, explainRouting } from '../router/index.js';
+import { trackToolCall, getContextSummary } from './context-tracker.js';
 import { getSystemPrompt } from '../system-prompt.js';
 import { loadConfig } from '../config.js';
 import { createSession, addMessage, getMessages, getLastSession } from '../session/store.js';
 import { needsCompaction, compact, engramRetrieve, engramStore } from './context.js';
 import * as renderer from '../tui/renderer.js';
-import { parsePlanFromText, type PlanStep } from './loop/plan-parser.js';
 import { getSkillManager } from '../skills/manager.js';
 import type { SkillMatch } from '../skills/types.js';
 
@@ -19,33 +18,29 @@ export interface AgentOpts {
   model?: string;
   provider?: string;
   oneShot?: boolean;
-  autoApprove?: boolean; // NEW: skip plan approval
-  concise?: boolean; // NEW: enable concise mode
+  autoApprove?: boolean;
+  concise?: boolean;
 }
+
+const MAX_TURNS = 30; // Safety limit to prevent infinite loops
 
 export async function agentLoop(opts: AgentOpts): Promise<void> {
   const config = loadConfig();
-  
-  // Initialize skills manager
   const skillManager = getSkillManager();
   await skillManager.initialize();
-  
-  // Smart model routing based on task complexity
+
+  // Model routing
   let providerName = opts.provider || config.provider;
   let modelName = opts.model || config.model || undefined;
-  
-  // If user didn't force a model and we have a prompt, use smart routing
+
   if (!opts.model && !opts.provider && opts.prompt) {
     const complexity = classifyTaskComplexity(opts.prompt);
-    const modelConfig = routeModel(complexity, {
-      preferCheap: (opts as any).preferCheap,
-      preferFast: (opts as any).preferFast,
-    });
+    const modelConfig = routeModel(complexity);
     providerName = modelConfig.provider;
     modelName = modelConfig.model;
     renderer.info(`🧠 ${explainRouting(complexity, modelConfig)}`);
   }
-  
+
   const provider = getProvider(providerName, modelName);
   renderer.info(`Using ${provider.name} / ${provider.model}`);
 
@@ -61,75 +56,66 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
       renderer.info('Resumed session');
     } else {
       sessionId = await createSession();
-      renderer.info('No previous session found, starting new.');
     }
   } else {
     sessionId = await createSession();
   }
-  
-  // Load session context (file tracking, project info, etc.)
-  loadSessionContext(sessionId);
 
-  // Initial prompt
+  // Get initial prompt
   if (opts.prompt) {
     messages.push({ role: 'user', content: [{ type: 'text', text: opts.prompt }] });
     await addMessage(sessionId, 'user', [{ type: 'text', text: opts.prompt }]);
   } else if (messages.length === 0) {
     const input = await renderer.userPrompt();
     if (!input.trim()) {
-      // Empty input in initial prompt - just wait, don't exit
       renderer.info('Type a command to get started, or Ctrl+C to exit.');
-      return agentLoop(opts); // Re-prompt
+      return agentLoop(opts);
     }
     messages.push({ role: 'user', content: [{ type: 'text', text: input }] });
     addMessage(sessionId, 'user', [{ type: 'text', text: input }]);
   }
 
-  // Main execution loop
-  while (true) {
-    // === PHASE 1: UNDERSTAND ===
+  // Main agent loop - fluid execution
+  let turnCount = 0;
+
+  while (turnCount < MAX_TURNS) {
+    turnCount++;
+
+    // Build system prompt with context + skills
     let system = getSystemPrompt(opts.concise);
-    
-    // Inject session context into system prompt
+
     const contextSummary = getContextSummary();
     if (contextSummary) {
       system += `\n\n## Session Context\n${contextSummary}`;
     }
-    
-    const lastUserMsg = messages[messages.length - 1];
+
+    // Skill matching on user messages
+    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user' && m.content.some(b => b.type === 'text'));
     let matchedSkills: SkillMatch[] = [];
-    
-    if (lastUserMsg?.role === 'user') {
+
+    if (lastUserMsg) {
       const userText = lastUserMsg.content
         .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
         .map(b => b.text)
         .join(' ');
 
-      if (userText) {
-        // Check for matching skills
+      if (userText && turnCount === 1) {
         matchedSkills = await skillManager.matchSkills(userText, 0.6);
-        
-        // Inject matched skills into system prompt
+
         if (matchedSkills.length > 0) {
           system += `\n\n## Relevant Skills\n`;
-          system += `The following learned skills may be relevant to this task:\n\n`;
-          
-          for (const match of matchedSkills.slice(0, 3)) { // Top 3 matches
-            system += `### ${match.skill.name} (confidence: ${(match.confidence * 100).toFixed(0)}%)\n`;
+          for (const match of matchedSkills.slice(0, 3)) {
+            system += `### ${match.skill.name} (${(match.confidence * 100).toFixed(0)}% match)\n`;
             system += `${match.skill.description}\n\n`;
             system += `**Approach:**\n${match.skill.approach}\n\n`;
-            
             if (match.skill.code && match.skill.code.length > 0) {
               system += `**Code patterns:**\n\`\`\`\n${match.skill.code.join('\n')}\n\`\`\`\n\n`;
             }
-            
-            if (match.skill.examples.length > 0) {
-              const latestExample = match.skill.examples[match.skill.examples.length - 1];
-              system += `**Example:**\n- Problem: ${latestExample.problem}\n- Outcome: ${latestExample.outcome}\n\n`;
-            }
           }
+          renderer.info(`💡 Skills: ${matchedSkills.slice(0, 3).map(m => m.skill.name).join(', ')}`);
         }
-        
+
+        // Engram context
         const engramContext = await engramRetrieve(userText);
         if (engramContext.trim()) {
           system += `\n\nRelevant context from memory:\n${engramContext}`;
@@ -140,298 +126,205 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
     // Context compaction
     if (needsCompaction(messages)) {
       messages = compact(messages);
-      renderer.warn('Context compacted to fit window.');
+      renderer.warn('Context compacted.');
     }
 
-    // Display matched skills to user
-    if (matchedSkills.length > 0) {
-      renderer.info(`💡 Found ${matchedSkills.length} relevant skill${matchedSkills.length > 1 ? 's' : ''}:`);
-      matchedSkills.slice(0, 3).forEach(match => {
-        renderer.info(`   - ${match.skill.name} (${(match.confidence * 100).toFixed(0)}% match)`);
-      });
-      renderer.newLine();
-    }
-
-    // === PHASE 2: PLAN ===
-    const spin = renderer.spinner('Planning...');
-    let plan: PlanStep[] | null = null;
-    
-    // Ask LLM to create a plan first
-    const planningSystem = system + `\n\nBefore executing, create a brief step-by-step plan.
-Start your response with:
-PLAN:
-1. [step]
-2. [step]
-...
-
-Then proceed with execution.`;
-
+    // Stream LLM response
+    const spin = renderer.spinner('Thinking...');
     const assistantBlocks: ContentBlock[] = [];
     let currentToolId = '';
-    let currentToolName = '';
-    let currentToolInputJson = ''; // Accumulate JSON string
+    let currentToolInputJson = '';
+    const toolInputJsonMap = new Map<string, string>();
     let hasToolUse = false;
     let textBuffer = '';
     let spinnerStopped = false;
-    let planText = '';
-
-    // Map to track input JSON per tool ID
-    const toolInputJsonMap = new Map<string, string>();
 
     try {
-      for await (const event of provider.stream(messages, planningSystem, TOOLS)) {
+      const STREAM_TIMEOUT = 90000; // 90s inactivity (large files take time)
+      let lastEventTime = Date.now();
+      let timedOut = false;
+
+      const streamTimeout = setInterval(() => {
+        if (Date.now() - lastEventTime > STREAM_TIMEOUT) {
+          clearInterval(streamTimeout);
+          timedOut = true;
+        }
+      }, 5000);
+
+      for await (const event of provider.stream(messages, system, TOOLS)) {
+        if (timedOut) break;
+        lastEventTime = Date.now();
         if (event.type === 'text_delta') {
-          if (!spinnerStopped) {
-            spin.stop();
-            renderer.clearLine();
-            spinnerStopped = true;
-          }
+          if (!spinnerStopped) { spin.stop(); renderer.clearLine(); spinnerStopped = true; }
           textBuffer += event.text;
           renderer.stream(event.text);
-          
-          // Extract plan if present
-          if (textBuffer.includes('PLAN:') && !plan) {
-            planText += event.text;
-          }
         } else if (event.type === 'tool_use_start') {
           hasToolUse = true;
           currentToolId = event.id;
-          currentToolName = event.name;
           currentToolInputJson = '';
           toolInputJsonMap.set(event.id, '');
-          
-          const block: ContentBlock = {
+          assistantBlocks.push({
             type: 'tool_use',
             id: event.id,
             name: event.name,
             input: {},
-          };
-          assistantBlocks.push(block);
-          
-          if (!spinnerStopped) {
-            spin.stop();
-            renderer.clearLine();
-            spinnerStopped = true;
-          }
-          renderer.tool(event.name, {});
+          });
+          if (!spinnerStopped) { spin.stop(); renderer.clearLine(); spinnerStopped = true; }
+          renderer.tool(event.name, { _streaming: true });
         } else if (event.type === 'tool_use_delta') {
-          // Accumulate JSON string
           currentToolInputJson += event.input_json;
-          
-          // Update map for the current tool
-          if (currentToolId) {
-            toolInputJsonMap.set(currentToolId, currentToolInputJson);
-          }
+          toolInputJsonMap.set(currentToolId, currentToolInputJson);
+          lastEventTime = Date.now(); // reset timer during large file writes
         } else if (event.type === 'tool_use_end') {
-          // Parse accumulated JSON and update the block
           const jsonStr = toolInputJsonMap.get(currentToolId) || currentToolInputJson;
           if (jsonStr) {
             try {
-              const parsedInput = JSON.parse(jsonStr);
+              const parsed = JSON.parse(jsonStr);
               const block = assistantBlocks.find(b => b.type === 'tool_use' && b.id === currentToolId) as any;
               if (block) {
-                block.input = parsedInput;
+                block.input = parsed;
+                // Overwrite the "⚡ write..." line with full details now that we have input
+                const summary = block.name === 'write' && parsed.path
+                  ? `${parsed.path} (${parsed.content ? Buffer.byteLength(parsed.content, 'utf8') : 0} bytes)`
+                  : block.name === 'bash' ? (parsed.command?.slice(0, 80) || '')
+                  : block.name === 'read' ? (parsed.path || '')
+                  : block.name === 'patch' ? (parsed.path || '')
+                  : '';
+                if (summary) {
+                  renderer.dim(`  → ${summary}`);
+                }
               }
             } catch (err) {
-              renderer.warn(`Failed to parse tool input JSON: ${err}`);
+              renderer.warn(`Failed to parse tool input: ${err}`);
             }
           }
         }
       }
 
-      if (!spinnerStopped) {
-        spin.stop();
+      if (timedOut) {
+        renderer.warn('LLM stream timed out (90s no activity). Model may be overloaded — try again.');
+      }
+
+      if (!spinnerStopped) spin.stop();
+      clearInterval(streamTimeout);
+      if (textBuffer) {
+        assistantBlocks.unshift({ type: 'text', text: textBuffer });
       }
       renderer.newLine();
 
-      // Parse plan from text if found
-      if (planText) {
-        plan = parsePlanFromText(planText);
-        if (plan && plan.length > 0) {
-          renderer.newLine();
-          renderer.info('📋 Execution Plan:');
-          plan.forEach((step, i) => {
-            renderer.info(`  ${i + 1}. ${step.description}`);
-          });
-          renderer.newLine();
-          
-          // === PHASE 3: APPROVAL ===
-          if (!opts.autoApprove && !opts.oneShot) {
-            const approval = await renderer.userPrompt('Proceed with this plan? [Y/n] ');
-            if (approval.toLowerCase() === 'n') {
-              renderer.info('Plan rejected. What would you like to do instead?');
-              const newInput = await renderer.userPrompt();
-              if (newInput.trim()) {
-                messages.push({ role: 'user', content: [{ type: 'text', text: newInput }] });
-                addMessage(sessionId, 'user', [{ type: 'text', text: newInput }]);
-                continue; // Start over with new request
-              } else {
-                break; // Exit
-              }
-            }
-          }
-        }
+      // If no tool calls, this is a final text response
+      if (!hasToolUse) {
+        messages.push({ role: 'assistant', content: assistantBlocks });
+        addMessage(sessionId, 'assistant', assistantBlocks);
+
+        if (opts.oneShot) return;
+
+        // Interactive: wait for next input
+        renderer.newLine();
+        const nextInput = await renderer.userPrompt();
+        if (!nextInput.trim()) continue;
+        messages.push({ role: 'user', content: [{ type: 'text', text: nextInput }] });
+        addMessage(sessionId, 'user', [{ type: 'text', text: nextInput }]);
+        turnCount = 0; // Reset turn counter for new user request
+        continue;
       }
 
-      // === PHASE 4: EXECUTE ===
-      // Tools were already called during streaming, now execute them
+      // Execute tools
       const toolResults: ContentBlock[] = [];
+      let finishCalled = false;
+
       for (const block of assistantBlocks) {
-        if (block.type === 'tool_use') {
-          if (block.name === 'finish') {
-            const finishMsg = block.input.message || 'Task complete.';
-            renderer.success(`✓ ${finishMsg}`);
-            
-            // Store success pattern in engram
-            await engramStore(`Completed: ${lastUserMsg?.content[0]?.type === 'text' ? lastUserMsg.content[0].text : 'task'}`, ['success']);
-            
-            addMessage(sessionId, 'assistant', assistantBlocks);
-            
-            // Done with this request
-            if (opts.oneShot) {
-              return;
-            }
-            
-            // Continue interactive mode
-            renderer.newLine();
-            const nextInput = await renderer.userPrompt();
-            if (!nextInput.trim()) {
-              // Empty input - keep prompting (continuous REPL)
-              continue;
-            }
-            messages = []; // Fresh context
-            messages.push({ role: 'user', content: [{ type: 'text', text: nextInput }] });
-            addMessage(sessionId, 'user', [{ type: 'text', text: nextInput }]);
-            continue;
+        if (block.type !== 'tool_use') continue;
+
+        if (block.name === 'finish') {
+          const msg = block.input?.message || 'Task complete.';
+          renderer.success(`✓ ${msg}`);
+          finishCalled = true;
+
+          // Record skill success
+          if (matchedSkills.length > 0) {
+            const topSkill = matchedSkills[0];
+            await skillManager.recordExecution(topSkill.skill.id, true, {
+              problem: opts.prompt || 'task',
+              execution: assistantBlocks.filter(b => b.type === 'tool_use').map((b: any) => b.name).join(' → '),
+              outcome: msg,
+            });
           }
 
-          // Resolve file references in tool input
-          const resolvedInput = resolveFileReference(block.input);
-          
-          const result = await executeTool(block.name, resolvedInput);
-          
-          // Track tool call in context
-          trackToolCall(block.name, resolvedInput, result);
-          
-          // Ensure result.content is a string
-          const resultContent = typeof result.content === 'string' 
-            ? result.content 
-            : JSON.stringify(result.content);
-          
-          renderer.result(resultContent, result.is_error);
-          
           toolResults.push({
             type: 'tool_result',
             tool_use_id: block.id,
-            content: resultContent,
-            is_error: result.is_error,
+            content: msg,
+            is_error: false,
           });
+          break;
         }
+
+        // Execute the tool
+        const result = await executeTool(block.name, block.input);
+        trackToolCall(block.name, block.input, result);
+
+        const resultContent = typeof result.content === 'string'
+          ? result.content
+          : JSON.stringify(result.content);
+
+        // Show result (truncated for display)
+        const displayContent = resultContent.length > 500
+          ? resultContent.slice(0, 500) + `\n... (${resultContent.length} chars total)`
+          : resultContent;
+        renderer.result(displayContent, result.is_error);
+
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: block.id,
+          content: resultContent,
+          is_error: result.is_error,
+        });
       }
 
-      messages.push({
-        role: 'assistant',
-        content: assistantBlocks,
-      });
+      // Push messages
+      messages.push({ role: 'assistant', content: assistantBlocks });
+      addMessage(sessionId, 'assistant', assistantBlocks);
 
       if (toolResults.length > 0) {
-        messages.push({
-          role: 'user',
-          content: toolResults,
-        });
-        addMessage(sessionId, 'assistant', assistantBlocks);
+        messages.push({ role: 'user', content: toolResults });
         addMessage(sessionId, 'user', toolResults);
-        
-        // === PHASE 5: VERIFY ===
-        // Simple verification: check tool results for errors
-        const hasErrors = toolResults.some(r => r.is_error);
-        if (hasErrors) {
-          renderer.warn('⚠️  Some tools reported errors');
-          // Store error in engram
-          const errorMsgs = toolResults
-            .filter(r => r.is_error)
-            .map(r => r.content)
-            .join('; ');
-          await engramStore(`Error during execution: ${errorMsgs}`, ['error', 'tool-failure']);
-        } else {
-          // === PHASE 6: REFLECT ===
-          // Store successful pattern
-          const taskDesc = lastUserMsg?.content
-            .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
-            .map(b => b.text)
-            .join(' ') || 'task';
-          
-          const toolsUsed = assistantBlocks
-            .filter(b => b.type === 'tool_use')
-            .map(b => (b as any).name)
-            .join(' → ');
-          
-          await engramStore(
-            `Successfully completed: ${taskDesc}. Tools: ${toolsUsed}`,
-            ['success', 'pattern']
-          );
-          
-          // Record skill usage if skills were matched
-          if (matchedSkills.length > 0) {
-            const topSkill = matchedSkills[0];
-            await skillManager.recordExecution(
-              topSkill.skill.id,
-              true,
-              {
-                problem: taskDesc,
-                execution: toolsUsed,
-                outcome: 'Successfully completed task using learned pattern',
-              }
-            );
-            renderer.success(`✓ Execution verified and learned (skill: ${topSkill.skill.name})`);
-          } else {
-            renderer.success('✓ Execution verified and learned');
-          }
-        }
-      } else {
-        addMessage(sessionId, 'assistant', assistantBlocks);
-        
-        if (opts.oneShot) {
-          return;
-        }
-        
-        // No tools used, agent gave a text response - continue conversation
+      }
+
+      // If finish was called, handle exit or next input
+      if (finishCalled) {
+        if (opts.oneShot) return;
+
         renderer.newLine();
         const nextInput = await renderer.userPrompt();
-        if (!nextInput.trim()) {
-          continue; // Empty - keep prompting
-        }
+        if (!nextInput.trim()) continue;
+        messages = []; // Fresh context for new task
         messages.push({ role: 'user', content: [{ type: 'text', text: nextInput }] });
         addMessage(sessionId, 'user', [{ type: 'text', text: nextInput }]);
+        turnCount = 0;
+        continue;
       }
 
-      // === PHASE 5: VERIFY ===
-      // Simple verification: if tools succeeded and no errors, we're good
-      // More sophisticated verification can be added later
+      // Otherwise, loop back to LLM with tool results (fluid execution)
+      // The LLM will decide: more tools? done? ask user?
 
     } catch (err: any) {
-      if (!spinnerStopped) {
-        spin.stop();
-      }
+      if (!spinnerStopped) spin.stop();
       renderer.error(err.message);
-      
-      // Store error pattern
-      await engramStore(`Error: ${err.message}`, ['error', 'failure']);
-      
-      if (opts.oneShot) {
-        throw err;
-      }
-      
-      // Continue in interactive mode
+      await engramStore(`Error: ${err.message}`, ['error']);
+
+      if (opts.oneShot) throw err;
+
       renderer.newLine();
       const retry = await renderer.userPrompt('Try again? ');
-      if (!retry.trim() || retry.toLowerCase() === 'n') {
-        break;
-      }
+      if (!retry.trim() || retry.toLowerCase() === 'n') break;
+      turnCount = 0;
     }
   }
 
-  // Save context on exit
-  saveSessionContext(sessionId);
+  if (turnCount >= MAX_TURNS) {
+    renderer.warn(`Reached ${MAX_TURNS} turn limit. Use a more specific prompt or break into smaller tasks.`);
+  }
+
   renderer.info('Goodbye!');
 }

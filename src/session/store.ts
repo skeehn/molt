@@ -1,4 +1,4 @@
-import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
+// Session store - simple JSON file (fast, no native deps, no WASM)
 import { join } from 'path';
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
@@ -6,74 +6,63 @@ import { randomUUID } from 'crypto';
 import type { Message } from '../providers/types.js';
 
 const DB_DIR = join(homedir(), '.grain');
-const DB_PATH = join(DB_DIR, 'sessions.db');
+const DB_PATH = join(DB_DIR, 'sessions.json');
 
-let db: SqlJsDatabase | null = null;
-let SQL: any = null;
+interface SessionRecord {
+  id: string;
+  title: string | null;
+  messages: Array<{ id: string; role: string; content_json: string; created_at: string }>;
+  created_at: string;
+  updated_at: string;
+}
 
-async function getDb(): Promise<SqlJsDatabase> {
-  if (db) return db;
+interface SessionStore {
+  sessions: SessionRecord[];
+}
 
-  if (!SQL) {
-    SQL = await initSqlJs();
-  }
+let store: SessionStore | null = null;
+
+function getStore(): SessionStore {
+  if (store) return store;
 
   if (!existsSync(DB_DIR)) {
     mkdirSync(DB_DIR, { recursive: true });
   }
 
-  // Load existing database or create new
   if (existsSync(DB_PATH)) {
-    const buffer = readFileSync(DB_PATH);
-    db = new SQL.Database(buffer);
-  } else {
-    db = new SQL.Database();
+    try {
+      store = JSON.parse(readFileSync(DB_PATH, 'utf-8'));
+      return store!;
+    } catch {
+      // Corrupted, start fresh
+    }
   }
 
-  // Create tables
-  db.run(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY,
-      title TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
-    )
-  `);
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      role TEXT NOT NULL,
-      content_json TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (session_id) REFERENCES sessions(id)
-    )
-  `);
-
-  db.run(`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)`);
-
-  return db;
+  store = { sessions: [] };
+  return store;
 }
 
-function saveDb() {
-  if (db) {
-    const data = db.export();
-    const buffer = Buffer.from(data);
-    writeFileSync(DB_PATH, buffer);
+function saveStore() {
+  if (store) {
+    // Keep only last 50 sessions to prevent bloat
+    if (store.sessions.length > 50) {
+      store.sessions = store.sessions.slice(-50);
+    }
+    writeFileSync(DB_PATH, JSON.stringify(store, null, 2));
   }
 }
 
 export async function createSession(title?: string): Promise<string> {
   const id = randomUUID();
-  const database = await getDb();
-  
-  database.run(
-    'INSERT INTO sessions (id, title) VALUES (?, ?)',
-    [id, title || null]
-  );
-  
-  saveDb();
+  const s = getStore();
+  s.sessions.push({
+    id,
+    title: title || null,
+    messages: [],
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+  saveStore();
   return id;
 }
 
@@ -82,55 +71,43 @@ export async function addMessage(
   role: 'user' | 'assistant',
   content: Message['content']
 ): Promise<void> {
-  const id = randomUUID();
-  const database = await getDb();
-  
-  database.run(
-    'INSERT INTO messages (id, session_id, role, content_json) VALUES (?, ?, ?, ?)',
-    [id, sessionId, role, JSON.stringify(content)]
-  );
-  
-  database.run(
-    'UPDATE sessions SET updated_at = datetime("now") WHERE id = ?',
-    [sessionId]
-  );
-  
-  saveDb();
+  const s = getStore();
+  const session = s.sessions.find(sess => sess.id === sessionId);
+  if (!session) return;
+
+  session.messages.push({
+    id: randomUUID(),
+    role,
+    content_json: JSON.stringify(content),
+    created_at: new Date().toISOString(),
+  });
+  session.updated_at = new Date().toISOString();
+
+  // Keep only last 100 messages per session
+  if (session.messages.length > 100) {
+    session.messages = session.messages.slice(-100);
+  }
+
+  saveStore();
 }
 
 export async function getMessages(sessionId: string): Promise<Message[]> {
-  const database = await getDb();
-  
-  const stmt = database.prepare(
-    'SELECT role, content_json FROM messages WHERE session_id = ? ORDER BY created_at ASC'
-  );
-  
-  const rows: Message[] = [];
-  while (stmt.step()) {
-    const row = stmt.getAsObject();
-    rows.push({
-      role: row.role as 'user' | 'assistant',
-      content: JSON.parse(row.content_json as string),
-    });
-  }
-  
-  stmt.free();
-  return rows;
+  const s = getStore();
+  const session = s.sessions.find(sess => sess.id === sessionId);
+  if (!session) return [];
+
+  return session.messages.map(msg => ({
+    role: msg.role as 'user' | 'assistant',
+    content: JSON.parse(msg.content_json),
+  }));
 }
 
 export async function getLastSession(): Promise<string | null> {
-  const database = await getDb();
-  
-  const stmt = database.prepare(
-    'SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1'
+  const s = getStore();
+  if (s.sessions.length === 0) return null;
+  // Sort by updated_at descending
+  const sorted = [...s.sessions].sort((a, b) =>
+    new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
   );
-  
-  if (stmt.step()) {
-    const row = stmt.getAsObject();
-    stmt.free();
-    return row.id as string;
-  }
-  
-  stmt.free();
-  return null;
+  return sorted[0].id;
 }

@@ -8,33 +8,28 @@ import { engramTool, executeEngram } from './engram.js';
 import { delegateTool, executeDelegate } from './delegate.js';
 import { finishTool, executeFinish } from './finish.js';
 import { workspaceScanTool, executeWorkspaceScan } from './workspace.js';
-// import { syntaxCheckTool, executeSyntaxCheck } from './syntax.js'; // Disabled: needs tree-sitter native bindings
-import { semanticSearchTool, executeSemanticSearch } from './semantic-search.js';
 import { multiEditTool, executeMultiEdit } from './multi-edit.js';
 import { gitTool, executeGit } from './git.js';
 import { testRunnerTool, executeTestRunner } from './test-runner.js';
-import { projectExplainerTool, executeExplainProject } from './project-explainer.js';
-import { knowledgeGraphTool, executeExtractKnowledgeGraph } from './knowledge-graph.js';
+import { repoMapTool, executeRepoMap } from './repo-map.js';
 
 export const TOOLS: Tool[] = [
-  // Core tools (10)
-  bashTool,
-  readTool,
-  writeTool,
-  patchTool,
-  grepTool,
-  workspaceScanTool,
-  gitTool,
-  testRunnerTool,
-  delegateTool,
-  finishTool,
-  
-  // Advanced tools (5)
-  engramTool,
-  semanticSearchTool,
-  multiEditTool,
-  projectExplainerTool,
-  knowledgeGraphTool,
+  // Core (10) — essential for any coding task
+  bashTool,        // Run shell commands
+  readTool,        // Read files
+  writeTool,       // Write files (with syntax check)
+  patchTool,       // Targeted edits
+  grepTool,        // Search content
+  workspaceScanTool, // List files/structure
+  gitTool,         // Git operations
+  testRunnerTool,  // Run tests
+  finishTool,      // Signal completion
+  repoMapTool,     // Understand codebase structure
+
+  // Power (5) — for complex tasks
+  multiEditTool,   // Batch edits across files
+  engramTool,      // Persistent memory
+  delegateTool,    // Spawn sub-agents
 ];
 
 const executors: Record<string, (input: any) => Promise<ToolResult>> = {
@@ -43,14 +38,12 @@ const executors: Record<string, (input: any) => Promise<ToolResult>> = {
   write: executeWrite,
   patch: executePatch,
   grep: executeGrep,
-  engram: executeEngram,
   workspace_scan: executeWorkspaceScan,
-  semantic_search: executeSemanticSearch,
-  multi_edit: executeMultiEdit,
   git: executeGit,
   run_tests: executeTestRunner,
-  explain_project: executeExplainProject,
-  extract_knowledge_graph: executeExtractKnowledgeGraph,
+  repo_map: executeRepoMap,
+  multi_edit: executeMultiEdit,
+  engram: executeEngram,
   delegate: executeDelegate,
   finish: executeFinish,
 };
@@ -58,10 +51,7 @@ const executors: Record<string, (input: any) => Promise<ToolResult>> = {
 export async function executeTool(name: string, input: any): Promise<ToolResult> {
   const executor = executors[name];
   if (!executor) {
-    return {
-      content: `Unknown tool: ${name}`,
-      is_error: true,
-    };
+    return { content: `Unknown tool: ${name}`, is_error: true };
   }
   return executor(input);
 }

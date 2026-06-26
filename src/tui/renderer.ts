@@ -23,8 +23,12 @@ export function toolStart(name: string, input: any): void {
   if (currentSpinner) {
     currentSpinner.stop();
     currentSpinner = null;
-    // Clear the spinner line completely
     process.stdout.write('\r\x1b[K');
+  }
+  // If input is the streaming placeholder, just show tool name
+  if (input?._streaming) {
+    process.stdout.write('\n' + chalk.dim(`⚡ ${name}...`) + '\n');
+    return;
   }
   const summary = summarizeInput(name, input);
   process.stdout.write('\n' + chalk.dim(`⚡ ${name}: ${summary}`) + '\n');
@@ -80,6 +84,10 @@ export function error(msg: string): void {
 
 export function info(msg: string): void {
   process.stdout.write(chalk.dim(msg) + '\n');
+}
+
+export function dim(msg: string): void {
+  process.stdout.write(chalk.gray(msg) + '\n');
 }
 
 export function spinner(text?: string): ReturnType<typeof ora> {

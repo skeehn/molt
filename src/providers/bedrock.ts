@@ -32,38 +32,58 @@ export class BedrockProvider implements Provider {
       input_schema: t.input_schema as any,
     }));
 
-    const stream = this.client.messages.stream({
-      model: this.model,
-      max_tokens: 16384,
-      system,
-      messages: apiMessages,
-      tools: apiTools,
-    });
+    // Retry with exponential backoff on rate limits (429)
+    const MAX_RETRIES = 4;
+    let lastError: any;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        const wait = Math.min(1000 * Math.pow(2, attempt), 30000); // 2s, 4s, 8s, max 30s
+        process.stderr.write(`\n⏳ Rate limited — retrying in ${wait/1000}s (attempt ${attempt+1}/${MAX_RETRIES})...\n`);
+        await new Promise(r => setTimeout(r, wait));
+      }
+      try {
+        const stream = this.client.messages.stream({
+          model: this.model,
+          max_tokens: 16384,
+          system,
+          messages: apiMessages,
+          tools: apiTools,
+        });
 
-    for await (const event of stream) {
-      if (event.type === 'content_block_start') {
-        const block = (event as any).content_block;
-        if (block.type === 'tool_use') {
-          yield { type: 'tool_use_start', id: block.id, name: block.name };
+        for await (const event of stream) {
+          if (event.type === 'content_block_start') {
+            const block = (event as any).content_block;
+            if (block.type === 'tool_use') {
+              yield { type: 'tool_use_start', id: block.id, name: block.name };
+            }
+          } else if (event.type === 'content_block_delta') {
+            const delta = (event as any).delta;
+            if (delta.type === 'text_delta') {
+              yield { type: 'text_delta', text: delta.text };
+            } else if (delta.type === 'input_json_delta') {
+              yield { type: 'tool_use_delta', id: '', input_json: delta.partial_json };
+            }
+          } else if (event.type === 'content_block_stop') {
+            yield { type: 'tool_use_end', id: '' };
+          } else if (event.type === 'message_stop') {
+            yield { type: 'message_end', stop_reason: 'end_turn' };
+          } else if (event.type === 'message_delta') {
+            const delta = (event as any).delta;
+            if (delta.stop_reason) {
+              yield { type: 'message_end', stop_reason: delta.stop_reason };
+            }
+          }
         }
-      } else if (event.type === 'content_block_delta') {
-        const delta = (event as any).delta;
-        if (delta.type === 'text_delta') {
-          yield { type: 'text_delta', text: delta.text };
-        } else if (delta.type === 'input_json_delta') {
-          yield { type: 'tool_use_delta', id: '', input_json: delta.partial_json };
+        return; // success — exit retry loop
+      } catch (err: any) {
+        lastError = err;
+        const status = err?.status || err?.statusCode;
+        if (status === 429 || /too many|rate.limit|throttl/i.test(err?.message || '')) {
+          continue; // retry
         }
-      } else if (event.type === 'content_block_stop') {
-        // Check if it was a tool_use block
-        yield { type: 'tool_use_end', id: '' };
-      } else if (event.type === 'message_stop') {
-        yield { type: 'message_end', stop_reason: 'end_turn' };
-      } else if (event.type === 'message_delta') {
-        const delta = (event as any).delta;
-        if (delta.stop_reason) {
-          yield { type: 'message_end', stop_reason: delta.stop_reason };
-        }
+        throw err; // non-retryable error
       }
     }
+    throw lastError;
   }
 }
