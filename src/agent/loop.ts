@@ -276,6 +276,34 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
             });
           }
 
+          // ── Write to engram: store task + outcome for future recall ──────────
+          try {
+            const toolsUsed = assistantBlocks
+              .filter((b: any) => b.type === 'tool_use')
+              .map((b: any) => b.name);
+            const filesChanged = assistantBlocks
+              .filter((b: any) => b.type === 'tool_use' && (b.name === 'write' || b.name === 'patch' || b.name === 'multi_edit'))
+              .map((b: any) => b.input?.path || (b.input?.edits || []).map((e: any) => e.path).join(', '))
+              .filter(Boolean);
+
+            const taskDesc = opts.prompt || 'interactive task';
+            const fact = [
+              `Task: ${taskDesc.slice(0, 200)}`,
+              `Result: ${msg}`,
+              filesChanged.length ? `Files: ${[...new Set(filesChanged)].join(', ')}` : '',
+              toolsUsed.length ? `Tools: ${[...new Set(toolsUsed)].join(', ')}` : '',
+            ].filter(Boolean).join('\n');
+
+            const tags = ['grain-task'];
+            if (filesChanged.some(f => f.endsWith('.rs'))) tags.push('rust');
+            if (filesChanged.some(f => f.endsWith('.ts') || f.endsWith('.js'))) tags.push('typescript');
+            if (filesChanged.some(f => f.endsWith('.go'))) tags.push('go');
+            if (filesChanged.some(f => f.endsWith('.py'))) tags.push('python');
+
+            await engramStore(fact, tags);
+          } catch { /* never let engram writes block task completion */ }
+          // ─────────────────────────────────────────────────────────────────────
+
           toolResults.push({
             type: 'tool_result',
             tool_use_id: block.id,

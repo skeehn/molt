@@ -75,7 +75,25 @@ export function compact(messages: Message[]): Message[] {
   return [summaryMessage, ...toKeep];
 }
 
+const ENGRAM_HTTP = 'http://localhost:7474';
+
 export async function engramRetrieve(query: string): Promise<string> {
+  // Try HTTP first (faster, no subprocess overhead)
+  try {
+    const url = `${ENGRAM_HTTP}/search?q=${encodeURIComponent(query)}&limit=5`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+    if (res.ok) {
+      const results = await res.json() as Array<{ body: string; score: number; tags: string[] }>;
+      if (results.length === 0) return '';
+      return results
+        .filter(r => r.score > 0.01)
+        .slice(0, 5)
+        .map(r => `• ${r.body}`)
+        .join('\n');
+    }
+  } catch { /* fall through to CLI */ }
+
+  // Fallback: CLI subprocess
   const engramBin = join(homedir(), 'bin', 'engram');
   const config = loadConfig();
   const dbPath = config.engram_db.replace('~', homedir());
@@ -94,6 +112,18 @@ export async function engramRetrieve(query: string): Promise<string> {
 }
 
 export async function engramStore(fact: string, tags: string[] = ['grain-auto']): Promise<void> {
+  // Try HTTP first
+  try {
+    await fetch(`${ENGRAM_HTTP}/add`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body: fact, tags, node_type: 'fact' }),
+      signal: AbortSignal.timeout(4000),
+    });
+    return;
+  } catch { /* fall through to CLI */ }
+
+  // Fallback: CLI subprocess
   const engramBin = join(homedir(), 'bin', 'engram');
   const config = loadConfig();
   const dbPath = config.engram_db.replace('~', homedir());
