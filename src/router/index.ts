@@ -39,8 +39,8 @@ export const MODEL_CONFIGS: Record<string, ModelConfig> = {
   },
   'opus': {
     provider: 'bedrock',
-    label: 'Opus 4.8',
-    model: 'us.anthropic.claude-opus-4-8',
+    label: 'Opus 4.5',
+    model: 'us.anthropic.claude-opus-4-5-20251101-v1:0',
     inputCostPer1M: 15.00,
     outputCostPer1M: 75.00,
     speedRating: 4,

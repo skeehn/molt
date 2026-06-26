@@ -330,14 +330,17 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
       destroyShell();
 
       if (opts.oneShot) {
-        // Don't crash — log what happened and exit gracefully
+        // Don't crash — log what happened and exit immediately
         const isQuota = /429|quota|rate.?limit|throttl/i.test(err.message);
+        const isAuthz = /403|AccessDenied|not available|forbidden/i.test(err.message);
         if (isQuota) {
           renderer.warn('Rate limit hit. Partial work saved to session. Run again to continue.');
+        } else if (isAuthz) {
+          renderer.warn(`Provider error: ${err.message}`);
         } else {
           renderer.warn(`Task stopped due to error: ${err.message}`);
         }
-        return; // graceful exit instead of throw
+        process.exit(1); // hard exit — persistent shell would hang otherwise
       }
 
       renderer.newLine();
