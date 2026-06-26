@@ -341,4 +341,6 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
   }
 
   renderer.info('Goodbye!');
+  // Force exit — persistent shell and other async handles keep the process alive otherwise
+  process.exit(0);
 }

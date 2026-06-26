@@ -2,11 +2,10 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import type { ToolResult } from '../providers/types.js';
 import * as renderer from '../tui/renderer.js';
 
-const MAX_OUTPUT = 50 * 1024; // 50KB
+const MAX_OUTPUT = 50_000;
+const DEFAULT_TIMEOUT = 60_000;
 
-// ── Persistent shell session ──────────────────────────────────────────────────
-// One bash process per agent task. Environment (cwd, exports, aliases) persists
-// across all tool calls just like a real terminal session.
+// ── Persistent shell session ───────────────────────────────────────────────────
 
 interface ShellSession {
   proc: ChildProcessWithoutNullStreams;
@@ -15,30 +14,28 @@ interface ShellSession {
 
 let _session: ShellSession | null = null;
 
-export function getOrCreateShell(initialCwd: string): ShellSession {
-  if (_session) return _session;
-
+function getOrCreateShell(cwd: string): ShellSession {
+  if (_session && !_session.proc.killed) return _session;
   const proc = spawn('bash', ['--norc', '--noprofile'], {
+    cwd,
     stdio: ['pipe', 'pipe', 'pipe'],
-    cwd: initialCwd,
-    env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1', PS1: '' },
+    env: { ...process.env, PS1: '', TERM: 'dumb' },
   });
-
   proc.on('exit', () => { _session = null; });
-  proc.on('error', () => { _session = null; });
-
-  _session = { proc, cwd: initialCwd };
+  _session = { proc, cwd };
   return _session;
 }
 
 export function destroyShell(): void {
   if (_session) {
+    try { _session.proc.stdin.end(); } catch {}
     try { _session.proc.kill(); } catch {}
     _session = null;
   }
 }
 
-// Run a command in the persistent shell. Uses a unique sentinel to detect end.
+// ── Command execution inside persistent shell ──────────────────────────────────
+
 function runInShell(
   session: ShellSession,
   command: string,
@@ -48,48 +45,56 @@ function runInShell(
   return new Promise((resolve) => {
     const sentinel = `__GRAIN_DONE_${Date.now()}_${Math.random().toString(36).slice(2)}__`;
     let output = '';
-    let exitCodeStr = '0';
     let done = false;
+    let lineBuffer = '';  // accumulates partial lines across chunks
 
     const timer = setTimeout(() => {
       if (!done) {
         done = true;
-        // Send Ctrl+C to interrupt any running process, then resolve
-        try { session.proc.stdin.write('\x03'); } catch {}
+        cleanup();
+        try { session.proc.stdin.write('\x03\n'); } catch {}
         resolve({ output: output + '\n[timeout]', exitCode: 124 });
       }
     }, timeoutMs);
 
-    const onData = (chunk: Buffer) => {
-      const text = chunk.toString();
-      const lines = text.split('\n');
+    function cleanup() {
+      clearTimeout(timer);
+      session.proc.stdout.off('data', onData);
+      session.proc.stderr.off('data', onErrData);
+    }
 
-      for (const line of lines) {
-        if (line.startsWith(sentinel)) {
-          // sentinel line: "__GRAIN_DONE_...__:EXIT_CODE"
-          const parts = line.split(':');
-          exitCodeStr = parts[1]?.trim() ?? '0';
-          clearTimeout(timer);
-          if (!done) {
-            done = true;
-            session.proc.stdout.off('data', onData);
-            session.proc.stderr.off('data', onErrData);
-            resolve({ output: output.trim(), exitCode: parseInt(exitCodeStr, 10) || 0 });
-          }
-          return;
-        }
-        // Skip empty PS1 artifacts
-        if (line.trim() === '') continue;
-        output += line + '\n';
-        if (output.length < MAX_OUTPUT) onLine(line);
+    function processLine(line: string) {
+      if (done) return;
+      // Check sentinel — must be exact match on the line
+      if (line.startsWith(sentinel + ':') || line === sentinel) {
+        const exitCodeStr = line.includes(':') ? line.split(':').pop()?.trim() ?? '0' : '0';
+        done = true;
+        cleanup();
+        resolve({ output: output.trim(), exitCode: parseInt(exitCodeStr, 10) || 0 });
+        return;
       }
-
+      if (line === '') return; // skip blank lines
+      output += line + '\n';
       if (output.length > MAX_OUTPUT && !output.includes('[truncated]')) {
         output = output.slice(0, MAX_OUTPUT) + '\n... [output truncated at 50KB]';
+      }
+      if (output.length < MAX_OUTPUT) onLine(line);
+    }
+
+    const onData = (chunk: Buffer) => {
+      // Accumulate into lineBuffer, process complete lines only
+      lineBuffer += chunk.toString();
+      const lines = lineBuffer.split('\n');
+      // Last element may be incomplete — keep it in the buffer
+      lineBuffer = lines.pop() ?? '';
+      for (const line of lines) {
+        processLine(line);
+        if (done) return;
       }
     };
 
     const onErrData = (chunk: Buffer) => {
+      if (done) return;
       const text = chunk.toString();
       output += text;
       if (/error|Error|ERR|warn|WARN/i.test(text)) {
@@ -101,8 +106,8 @@ function runInShell(
     session.proc.stdout.on('data', onData);
     session.proc.stderr.on('data', onErrData);
 
-    // Write: command, capture exit code, emit sentinel
-    const wrapped = `${command}\n__exit_code=$?\necho "${sentinel}:$__exit_code"\n`;
+    // Wrap: run command, capture exit, emit sentinel on its own line
+    const wrapped = `${command}\n__gc=$?; echo "${sentinel}:$__gc"\n`;
     session.proc.stdin.write(wrapped);
   });
 }
@@ -114,19 +119,13 @@ export const bashTool = {
   description: [
     'Execute a shell command. The shell is PERSISTENT — cd, exports, and env vars carry over between calls.',
     'For long-running servers use timeout: `timeout 8 npm run dev`.',
-    'Default timeout 60s, max 300s.',
+    'Avoid interactive commands (vim, less) — pipe to cat or use flags.',
   ].join(' '),
   input_schema: {
     type: 'object',
     properties: {
-      command: {
-        type: 'string',
-        description: 'Shell command to run. cd works persistently. For servers: timeout 8 npm run dev',
-      },
-      timeout: {
-        type: 'number',
-        description: 'Timeout in seconds (default: 60, max: 300)',
-      },
+      command: { type: 'string', description: 'Shell command to run' },
+      timeout: { type: 'number', description: 'Timeout in seconds (default: 60)' },
     },
     required: ['command'],
   },
@@ -134,22 +133,29 @@ export const bashTool = {
 
 export async function executeBash(
   input: { command: string; timeout?: number },
-  initialCwd?: string,
+  cwd?: string,
 ): Promise<ToolResult> {
-  const timeoutMs = Math.min((input.timeout ?? 60) * 1000, 300_000);
-  const cwd = initialCwd || process.cwd();
+  const timeoutMs = (input.timeout ?? 60) * 1000;
+  const workdir = cwd || process.cwd();
+  const session = getOrCreateShell(workdir);
 
-  const session = getOrCreateShell(cwd);
+  renderer.toolStart('bash', input.command.slice(0, 120));
 
-  let lastStreamTime = 0;
-  const { output, exitCode } = await runInShell(session, input.command, timeoutMs, (line) => {
-    const now = Date.now();
-    if (now - lastStreamTime > 150) {
-      renderer.dim(`  │ ${line.slice(0, 120)}`);
-      lastStreamTime = now;
-    }
-  });
+  const { output, exitCode } = await runInShell(
+    session,
+    input.command,
+    timeoutMs,
+    (_line) => {}, // streaming lines suppressed — show result once at end
+  );
 
-  const content = output || `Process exited with code ${exitCode}`;
-  return { content, is_error: exitCode !== 0 };
+  if (output) renderer.dim(`  ${output.split('\n').slice(0, 6).join('\n  ')}`);
+
+  if (exitCode !== 0 && exitCode !== 124) {
+    return {
+      content: output || `Command failed with exit code ${exitCode}`,
+      is_error: false, // Don't mark as error — let the LLM decide how to handle it
+    };
+  }
+
+  return { content: output || '(no output)' };
 }

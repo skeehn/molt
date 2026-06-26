@@ -64,7 +64,7 @@ function buildCommand(framework: string, failFast: boolean, testPath?: string): 
     case 'bun':    return `bun test${failFast ? ' --bail' : ''}${target} 2>&1`;
     case 'npm':    return `npm test -- ${failFast ? '--bail' : ''} 2>&1`;
     case 'cargo':  return `cargo test${failFast ? ' --no-fail-fast' : ''}${target ? ` ${target}` : ''} 2>&1`;
-    case 'pytest': return `python -m pytest${failFast ? ' -x' : ''}${target} --tb=short -q 2>&1`;
+    case 'pytest': return `python3 -m pytest${failFast ? ' -x' : ''}${target} --tb=short -q 2>&1`;
     case 'go':     return `go test${failFast ? ' -failfast' : ''} ./...${target} 2>&1`;
     default:       return `npm test 2>&1`;
   }
