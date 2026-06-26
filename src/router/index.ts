@@ -1,4 +1,5 @@
 // Model router - intelligent model selection based on task complexity
+// Model IDs verified against AWS Bedrock live inference profiles — June 2026
 import type { Message } from '../providers/types.js';
 
 export enum TaskComplexity {
@@ -12,15 +13,17 @@ export enum TaskComplexity {
 export interface ModelConfig {
   provider: string;
   model: string;
+  label: string;
   inputCostPer1M: number;
   outputCostPer1M: number;
   speedRating: number;
 }
 
-// Real model tiers with actual differentiation
+// June 2026 — verified live against AWS Bedrock us-east-1 inference profiles
 export const MODEL_CONFIGS: Record<string, ModelConfig> = {
   'haiku': {
     provider: 'bedrock',
+    label: 'Haiku 4.5',
     model: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
     inputCostPer1M: 0.80,
     outputCostPer1M: 4.00,
@@ -28,26 +31,47 @@ export const MODEL_CONFIGS: Record<string, ModelConfig> = {
   },
   'sonnet': {
     provider: 'bedrock',
-    model: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+    label: 'Sonnet 4.6',
+    model: 'us.anthropic.claude-sonnet-4-6',
     inputCostPer1M: 3.00,
     outputCostPer1M: 15.00,
     speedRating: 7,
   },
   'opus': {
     provider: 'bedrock',
-    model: 'us.anthropic.claude-opus-4-5-20251101-v1:0',
+    label: 'Opus 4.8',
+    model: 'us.anthropic.claude-opus-4-8',
     inputCostPer1M: 15.00,
     outputCostPer1M: 75.00,
     speedRating: 4,
   },
 };
 
+// Aliases so users can pass --model sonnet4-5, sonnet, opus, etc.
+export const MODEL_ALIASES: Record<string, string> = {
+  'haiku':        'haiku',
+  'haiku4':       'haiku',
+  'haiku4-5':     'haiku',
+  'sonnet':       'sonnet',
+  'sonnet4':      'sonnet',
+  'sonnet4-5':    'sonnet',
+  'sonnet4-6':    'sonnet',
+  'opus':         'opus',
+  'opus4':        'opus',
+  'opus4-5':      'opus',
+  'opus4-8':      'opus',
+  'fast':         'haiku',
+  'cheap':        'haiku',
+  'best':         'opus',
+  'smart':        'opus',
+};
+
 // Complexity to model mapping
 const COMPLEXITY_TO_MODEL: Record<TaskComplexity, string> = {
-  [TaskComplexity.TRIVIAL]: 'haiku',
-  [TaskComplexity.SIMPLE]: 'haiku',
+  [TaskComplexity.TRIVIAL]:  'haiku',
+  [TaskComplexity.SIMPLE]:   'haiku',
   [TaskComplexity.MODERATE]: 'sonnet',
-  [TaskComplexity.COMPLEX]: 'opus',
+  [TaskComplexity.COMPLEX]:  'opus',
   [TaskComplexity.CRITICAL]: 'opus',
 };
 
@@ -75,6 +99,8 @@ const KEYWORD_PATTERNS = {
     /database\sschema|migration|model/i,
     /api\sdesign|rest\sapi|graphql/i,
     /website|landing|web\sapp|frontend/i,
+    /implement.*from\sscratch|rewrite/i,
+    /benchmark|test\ssuite|comprehensive/i,
   ],
 };
 
@@ -99,7 +125,7 @@ export function classifyTaskComplexity(prompt: string, _conversationHistory?: Me
     if (pattern.test(prompt)) return TaskComplexity.SIMPLE;
   }
 
-  // Heuristics
+  // Heuristics: word count + multi-step
   const wordCount = prompt.split(/\s+/).length;
   const hasMultipleSteps = /\d\.\s|\band\s.*\band\s/.test(prompt);
 
@@ -110,33 +136,38 @@ export function classifyTaskComplexity(prompt: string, _conversationHistory?: Me
   return TaskComplexity.MODERATE;
 }
 
+export function resolveModelAlias(alias: string): string | undefined {
+  return MODEL_ALIASES[alias.toLowerCase()];
+}
+
 export function routeModel(
   complexity: TaskComplexity,
   options?: { preferFast?: boolean; preferCheap?: boolean; forceModel?: string; }
 ): ModelConfig {
-  if (options?.forceModel && MODEL_CONFIGS[options.forceModel]) {
-    return MODEL_CONFIGS[options.forceModel];
+  if (options?.forceModel) {
+    // Try alias first, then direct key
+    const key = MODEL_ALIASES[options.forceModel.toLowerCase()] ?? options.forceModel;
+    if (MODEL_CONFIGS[key]) return MODEL_CONFIGS[key];
   }
 
   let modelKey = COMPLEXITY_TO_MODEL[complexity];
-
-  if (options?.preferCheap) modelKey = 'haiku';
-  if (options?.preferFast) modelKey = 'haiku';
+  if (options?.preferCheap || options?.preferFast) modelKey = 'haiku';
 
   return MODEL_CONFIGS[modelKey];
 }
 
 export function estimateCost(inputTokens: number, outputTokens: number, model: ModelConfig): number {
-  return (inputTokens / 1_000_000) * model.inputCostPer1M + (outputTokens / 1_000_000) * model.outputCostPer1M;
+  return (inputTokens / 1_000_000) * model.inputCostPer1M +
+         (outputTokens / 1_000_000) * model.outputCostPer1M;
 }
 
 export function explainRouting(complexity: TaskComplexity, model: ModelConfig): string {
   const reasons: Record<TaskComplexity, string> = {
-    [TaskComplexity.TRIVIAL]: 'Quick task → Haiku (fast, cheap)',
-    [TaskComplexity.SIMPLE]: 'Simple edit → Haiku (fast, cheap)',
-    [TaskComplexity.MODERATE]: 'Standard task → Sonnet (balanced)',
-    [TaskComplexity.COMPLEX]: 'Complex work → Opus (most capable)',
-    [TaskComplexity.CRITICAL]: 'Critical → Opus (most capable)',
+    [TaskComplexity.TRIVIAL]:  `Quick task → ${model.label} (fast, cheap)`,
+    [TaskComplexity.SIMPLE]:   `Simple edit → ${model.label} (fast, cheap)`,
+    [TaskComplexity.MODERATE]: `Standard task → ${model.label} (balanced)`,
+    [TaskComplexity.COMPLEX]:  `Complex work → ${model.label} (most capable)`,
+    [TaskComplexity.CRITICAL]: `Critical → ${model.label} (most capable)`,
   };
-  return `${reasons[complexity]} [${model.model.split('.').pop()?.split('-')[0] || model.model}]`;
+  return `${reasons[complexity]} [${model.model.split('/').pop()?.split('.').pop() || model.model}]`;
 }

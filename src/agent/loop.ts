@@ -2,7 +2,7 @@
 import type { Message, ContentBlock } from '../providers/types.js';
 import { getProvider } from '../providers/index.js';
 import { TOOLS, executeTool, setToolCwd, destroyShell } from '../tools/index.js';
-import { classifyTaskComplexity, routeModel, explainRouting } from '../router/index.js';
+import { classifyTaskComplexity, routeModel, explainRouting, resolveModelAlias, MODEL_CONFIGS } from '../router/index.js';
 import { trackToolCall, getContextSummary } from './context-tracker.js';
 import { getSystemPrompt } from '../system-prompt.js';
 import { loadConfig } from '../config.js';
@@ -32,6 +32,17 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
   // Model routing
   let providerName = opts.provider || config.provider;
   let modelName = opts.model || config.model || undefined;
+
+  // Resolve alias (e.g. 'sonnet' → 'us.anthropic.claude-sonnet-4-6')
+  if (modelName) {
+    const aliasKey = resolveModelAlias(modelName);
+    if (aliasKey && MODEL_CONFIGS[aliasKey]) {
+      const mc = MODEL_CONFIGS[aliasKey];
+      providerName = mc.provider;
+      modelName = mc.model;
+      renderer.info(`🧠 Forced model → ${mc.label}`);
+    }
+  }
 
   if (!opts.model && !opts.provider && opts.prompt) {
     const complexity = classifyTaskComplexity(opts.prompt);
