@@ -81,6 +81,8 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
     messages.push({ role: 'user', content: [{ type: 'text', text: opts.prompt }] });
     await addMessage(sessionId, 'user', [{ type: 'text', text: opts.prompt }]);
   } else if (messages.length === 0) {
+    // Non-TTY (subprocess): no prompt = nothing to do, exit cleanly
+    if (!process.stdin.isTTY) return;
     const input = await renderer.userPrompt();
     if (!input.trim()) {
       renderer.info('Type a command to get started, or Ctrl+C to exit.');
@@ -245,6 +247,9 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
         if (opts.oneShot) return;
 
         // Interactive: wait for next input
+        // If stdin is not a TTY (e.g. subprocess/CI), treat as one-shot and exit
+        if (!process.stdin.isTTY) return;
+
         renderer.newLine();
         const nextInput = await renderer.userPrompt();
         if (!nextInput.trim()) continue;
@@ -349,6 +354,9 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
         destroyShell(); // clean up persistent bash session
         if (opts.oneShot) return;
 
+        // Non-TTY (subprocess/CI): treat as one-shot
+        if (!process.stdin.isTTY) return;
+
         renderer.newLine();
         const nextInput = await renderer.userPrompt();
         if (!nextInput.trim()) continue;
@@ -383,6 +391,7 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
       }
 
       renderer.newLine();
+      if (!process.stdin.isTTY) break; // non-TTY: don't wait for retry
       const retry = await renderer.userPrompt('Try again? ');
       if (!retry.trim() || retry.toLowerCase() === 'n') break;
       turnCount = 0;
