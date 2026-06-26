@@ -49,11 +49,12 @@ interface ParsedArgs {
   model?: string;
   provider?: string;
   maxTurns?: number;
+  tbBridge: boolean;  // TerminalBench bridge mode
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
   const args = argv.slice(2);
-  const result: ParsedArgs = { autoApprove: false, concise: false };
+  const result: ParsedArgs = { autoApprove: false, concise: false, tbBridge: false };
 
   let i = 0;
   while (i < args.length) {
@@ -119,6 +120,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     else if (arg === '--model')                      { result.model = args[++i]; }
     else if (arg === '--provider')                   { result.provider = args[++i]; }
     else if (arg === '--max-turns')                  { result.maxTurns = parseInt(args[++i], 10); }
+    else if (arg === '--tb-bridge')                  { result.tbBridge = true; }
     else if (!arg.startsWith('-') && !result.prompt) {
       result.prompt = args.slice(i).join(' ');
       break;
@@ -870,14 +872,24 @@ async function main(): Promise<void> {
 
   // Run the agent
   try {
+    // TB bridge mode: set env so bash.ts proxies commands to container
+    if (parsed.tbBridge) {
+      process.env.GRAIN_TB_BRIDGE = '1';
+    }
+
     await orchestrate({
       prompt:      parsed.prompt,
-      autoApprove: parsed.autoApprove,
-      concise:     parsed.concise,
+      autoApprove: parsed.autoApprove || parsed.tbBridge,
+      concise:     parsed.concise     || parsed.tbBridge,
       model:       parsed.model,
       provider:    parsed.provider,
       maxTurns:    parsed.maxTurns,
     });
+
+    // Signal done to TB bridge
+    if (parsed.tbBridge) {
+      process.stdout.write(JSON.stringify({ type: 'done' }) + '\n');
+    }
   } catch (e: any) {
     if (e.message === 'SIGINT') {
       renderer.newLine();

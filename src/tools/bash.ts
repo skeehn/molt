@@ -1,5 +1,64 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import * as readline from 'readline';
 import type { ToolResult } from '../providers/types.js';
+
+// ── Terminal-Bench bridge mode ─────────────────────────────────────────────────
+// When GRAIN_TB_BRIDGE=1, bash commands are proxied to the host via JSON-line
+// protocol over stdout/stdin instead of running locally.
+// The TerminalBench grain agent reads these messages and executes them in the
+// Docker container via TmuxSession, then writes back the result.
+
+const TB_BRIDGE = process.env.GRAIN_TB_BRIDGE === '1';
+
+// readline interface for reading bridge responses
+let _rl: readline.Interface | null = null;
+let _pendingResolve: ((line: string) => void) | null = null;
+
+function getBridgeRL(): readline.Interface {
+  if (!_rl) {
+    _rl = readline.createInterface({ input: process.stdin, terminal: false });
+    _rl.on('line', (line) => {
+      if (_pendingResolve) {
+        const fn = _pendingResolve;
+        _pendingResolve = null;
+        fn(line);
+      }
+    });
+  }
+  return _rl;
+}
+
+function readBridgeLine(): Promise<string> {
+  getBridgeRL(); // ensure listener is set up
+  return new Promise((resolve) => {
+    _pendingResolve = resolve;
+  });
+}
+
+async function executeBashBridge(
+  command: string,
+  timeoutMs: number,
+): Promise<{ output: string; exitCode: number }> {
+  // Write request to stdout (the TB agent reads this)
+  const req = JSON.stringify({ type: 'bash', cmd: command });
+  process.stdout.write(req + '\n');
+
+  // Wait for response with timeout
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error('bridge timeout')), timeoutMs)
+  );
+
+  try {
+    const line = await Promise.race([readBridgeLine(), timeoutPromise]);
+    const resp = JSON.parse(line);
+    return {
+      output: resp.output ?? '(no output)',
+      exitCode: resp.exit_code ?? 0,
+    };
+  } catch {
+    return { output: '[bridge timeout or error]', exitCode: 124 };
+  }
+}
 
 const MAX_OUTPUT = 50_000;
 const DEFAULT_TIMEOUT = 60_000;
@@ -135,6 +194,17 @@ export async function executeBash(
   cwd?: string,
 ): Promise<ToolResult> {
   const timeoutMs = (input.timeout ?? 60) * 1000;
+
+  // ── TB bridge: proxy to container via JSON-line protocol ──────────────────
+  if (TB_BRIDGE) {
+    const { output, exitCode } = await executeBashBridge(input.command, timeoutMs);
+    if (exitCode !== 0 && exitCode !== 124) {
+      return { content: output || `Command failed with exit code ${exitCode}`, is_error: false };
+    }
+    return { content: output || '(no output)' };
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   const workdir = cwd || process.cwd();
   const session = getOrCreateShell(workdir);
 
