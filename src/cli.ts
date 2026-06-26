@@ -337,6 +337,42 @@ async function handleStatus(): Promise<void> {
     }
   }
 
+  // Skills
+  try {
+    const { getSkillManager } = await import('./skills/manager.js');
+    const mgr = getSkillManager();
+    await mgr.initialize();
+    const mdSkills  = await mgr.listMarkdownSkills();
+    const jsonSkills = await mgr.getAllJsonSkills();
+    const total = mdSkills.length + jsonSkills.length;
+    if (total > 0) {
+      console.log(`  ${bold('Skills')}    ${c.cyan}${total}${c.reset} loaded  ${dim(`(${mdSkills.length} markdown, ${jsonSkills.length} learned)`)}`);
+    } else {
+      console.log(`  ${bold('Skills')}    ${dim('none — create one with: grain skills add <name>')}`);
+    }
+  } catch { /* skip */ }
+
+  // Git status (current directory)
+  try {
+    const { execSync } = await import('child_process');
+    const branch = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf-8', stdio: ['pipe','pipe','pipe'] }).trim();
+    const gitStatus = execSync('git status --porcelain', { encoding: 'utf-8', stdio: ['pipe','pipe','pipe'] }).trim();
+    const changed = gitStatus ? gitStatus.split('\n').length : 0;
+    const toplevel = execSync('git rev-parse --show-toplevel', { encoding: 'utf-8', stdio: ['pipe','pipe','pipe'] }).trim();
+    const repoName = toplevel.split('/').pop() || toplevel;
+    console.log(`  ${bold('Repo')}      ${c.cyan}${repoName}${c.reset}  ${dim(`${branch}${changed > 0 ? ` · ${changed} changed` : ' · clean'}`)}`);
+  } catch { /* not in a git repo */ }
+
+  // Sessions
+  try {
+    const { statSync } = await import('fs');
+    const dbPath = join(homedir(), '.grain', 'sessions.db');
+    if (existsSync(dbPath)) {
+      const sz = statSync(dbPath).size;
+      console.log(`  ${bold('Sessions')}  ${dim(`${(sz / 1024).toFixed(0)} KB stored`)}`);
+    }
+  } catch { /* skip */ }
+
   // Provider check
   process.stdout.write(`  ${bold('Provider')}  `);
   if (config.provider === 'bedrock') {
