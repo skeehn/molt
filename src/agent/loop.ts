@@ -107,46 +107,48 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
       system += `\n\n## Session Context\n${contextSummary}`;
     }
 
-    // ── Markdown skills: inject once at turn 1 as permanent context ──────────
+    // Resolve the most recent user message text once — used by both MD and JSON skill matching
+    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user' && m.content.some(b => b.type === 'text'));
+    const lastUserText = lastUserMsg
+      ? lastUserMsg.content
+          .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+          .map(b => b.text)
+          .join(' ')
+      : undefined;
+
+    // ── Markdown skills: inject top-3 by relevance at turn 1 ─────────────────
     if (turnCount === 1) {
-      const mdContext = await skillManager.getMarkdownContext();
+      const mdContext = await skillManager.getMarkdownContext(lastUserText);
       if (mdContext) {
         system += `\n\n${mdContext}`;
-        const mdCount = (await skillManager.listMarkdownSkills()).length;
-        renderer.info(`💡 Skills: ${mdCount} loaded`);
+        const mdTotal = (await skillManager.listMarkdownSkills()).length;
+        const mdShown = (mdContext.match(/^### /gm) ?? []).length;
+        renderer.info(`💡 Skills: ${mdShown} of ${mdTotal} md loaded`);
       }
     }
 
     // ── JSON skills: keyword-matched at turn 1 ────────────────────────────────
-    const lastUserMsg = [...messages].reverse().find(m => m.role === 'user' && m.content.some(b => b.type === 'text'));
     let matchedSkills: SkillMatch[] = [];
 
-    if (lastUserMsg) {
-      const userText = lastUserMsg.content
-        .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
-        .map(b => b.text)
-        .join(' ');
+    if (lastUserText && turnCount === 1) {
+      matchedSkills = await skillManager.matchSkills(lastUserText, 0.6);
 
-      if (userText && turnCount === 1) {
-        matchedSkills = await skillManager.matchSkills(userText, 0.6);
-
-        if (matchedSkills.length > 0) {
-          system += `\n\n## Relevant Learned Patterns\n`;
-          for (const match of matchedSkills.slice(0, 3)) {
-            system += `### ${match.skill.name} (${(match.confidence * 100).toFixed(0)}% match)\n`;
-            system += `${match.skill.description}\n\n`;
-            system += `**Approach:**\n${match.skill.approach}\n\n`;
-            if (match.skill.code && match.skill.code.length > 0) {
-              system += `**Code patterns:**\n\`\`\`\n${match.skill.code.join('\n')}\n\`\`\`\n\n`;
-            }
+      if (matchedSkills.length > 0) {
+        system += `\n\n## Relevant Learned Patterns\n`;
+        for (const match of matchedSkills.slice(0, 3)) {
+          system += `### ${match.skill.name} (${(match.confidence * 100).toFixed(0)}% match)\n`;
+          system += `${match.skill.description}\n\n`;
+          system += `**Approach:**\n${match.skill.approach}\n\n`;
+          if (match.skill.code && match.skill.code.length > 0) {
+            system += `**Code patterns:**\n\`\`\`\n${match.skill.code.join('\n')}\n\`\`\`\n\n`;
           }
         }
+      }
 
-        // Engram context
-        const engramContext = await engramRetrieve(userText);
-        if (engramContext.trim()) {
-          system += `\n\nRelevant context from memory:\n${engramContext}`;
-        }
+      // Engram context
+      const engramContext = await engramRetrieve(lastUserText);
+      if (engramContext.trim()) {
+        system += `\n\nRelevant context from memory:\n${engramContext}`;
       }
     }
 
@@ -271,14 +273,21 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
           renderer.success(`✓ ${msg}`);
           finishCalled = true;
 
-          // Record skill success
+          // Record skill success for all matched skills (up to 3)
           if (matchedSkills.length > 0) {
-            const topSkill = matchedSkills[0];
-            await skillManager.recordExecution(topSkill.skill.id, true, {
-              problem: opts.prompt || 'task',
-              execution: assistantBlocks.filter(b => b.type === 'tool_use').map((b: any) => b.name).join(' → '),
-              outcome: msg,
-            });
+            const toolTrace = assistantBlocks
+              .filter(b => b.type === 'tool_use')
+              .map((b: any) => b.name)
+              .join(' → ');
+            await Promise.all(
+              matchedSkills.map(m =>
+                skillManager.recordExecution(m.skill.id, true, {
+                  problem: opts.prompt || 'task',
+                  execution: toolTrace,
+                  outcome: msg,
+                }),
+              ),
+            );
           }
 
           // ── Write to engram: store task + outcome for future recall ──────────

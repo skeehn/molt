@@ -11,13 +11,85 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import { randomUUID } from 'crypto';
-import type {
-  Skill,
-  MarkdownSkill,
-  SkillMatch,
-  CreateSkillConfig,
-  SkillExample,
-} from './types.js';
+
+// ─── CWD language detection ────────────────────────────────────────────────────
+
+/** Map from file extension → canonical language/framework tags */
+const EXT_TAGS: Record<string, string[]> = {
+  rs:    ['rust', 'cargo'],
+  toml:  ['rust', 'cargo', 'toml'],
+  ts:    ['typescript', 'ts', 'node'],
+  tsx:   ['typescript', 'react', 'tsx'],
+  jsx:   ['javascript', 'react', 'jsx'],
+  js:    ['javascript', 'js', 'node'],
+  py:    ['python', 'pip'],
+  go:    ['go', 'golang'],
+  rb:    ['ruby', 'rails'],
+  java:  ['java', 'maven', 'gradle'],
+  kt:    ['kotlin', 'android'],
+  swift: ['swift', 'ios', 'xcode'],
+  cs:    ['csharp', 'dotnet'],
+  cpp:   ['cpp', 'c++'],
+  c:     ['c', 'gcc'],
+  vue:   ['vue', 'vite'],
+  svelte:['svelte', 'vite'],
+  dart:  ['dart', 'flutter'],
+  ex:    ['elixir', 'phoenix'],
+  exs:   ['elixir'],
+  hs:    ['haskell'],
+  lua:   ['lua'],
+  sh:    ['shell', 'bash'],
+  zsh:   ['shell', 'zsh'],
+};
+
+/** Special filenames → tags (checked case-insensitively) */
+const FILE_TAGS: Record<string, string[]> = {
+  'cargo.toml':      ['rust', 'cargo'],
+  'package.json':    ['node', 'javascript', 'typescript', 'npm'],
+  'vite.config.ts':  ['vite', 'react', 'frontend'],
+  'vite.config.js':  ['vite', 'react', 'frontend'],
+  'next.config.js':  ['next', 'react', 'frontend'],
+  'next.config.ts':  ['next', 'react', 'frontend'],
+  'tailwind.config.js': ['tailwind', 'css', 'frontend'],
+  'tailwind.config.ts': ['tailwind', 'css', 'frontend'],
+  'dockerfile':      ['docker', 'container'],
+  'docker-compose.yml': ['docker', 'compose'],
+  'go.mod':          ['go', 'golang'],
+  'pyproject.toml':  ['python', 'pip'],
+  'requirements.txt':['python', 'pip'],
+  'gemfile':         ['ruby', 'rails'],
+  'pom.xml':         ['java', 'maven'],
+  'build.gradle':    ['java', 'gradle'],
+};
+
+/**
+ * Reads the top-level entries of `cwd` and returns a deduplicated set
+ * of language/framework tags inferred from file extensions and filenames.
+ * Capped to 50 entries so it stays cheap on large directories.
+ */
+async function detectCwdLanguages(cwd = process.cwd()): Promise<Set<string>> {
+  const tags = new Set<string>();
+  let entries: string[] = [];
+  try {
+    entries = await fs.readdir(cwd);
+  } catch {
+    return tags;
+  }
+  for (const entry of entries.slice(0, 50)) {
+    const lower = entry.toLowerCase();
+    // Check special filenames first
+    if (FILE_TAGS[lower]) {
+      for (const t of FILE_TAGS[lower]) tags.add(t);
+      continue;
+    }
+    // Check extension
+    const ext = lower.split('.').pop() ?? '';
+    if (ext && EXT_TAGS[ext]) {
+      for (const t of EXT_TAGS[ext]) tags.add(t);
+    }
+  }
+  return tags;
+}
 
 // ─── YAML frontmatter parser (no deps) ────────────────────────────────────────
 
@@ -94,13 +166,88 @@ export class SkillManager {
     }
   }
 
-  /** Returns Markdown skills block to always inject into system prompt */
-  async getMarkdownContext(): Promise<string> {
+  /**
+   * Score a single Markdown skill against the task prompt and CWD language tags.
+   *
+   * Scoring layers (returns 0–1):
+   *   1. Tag / keyword overlap with prompt tokens → 0.70 – 0.95
+   *   2. Description word overlap with prompt tokens → 0.50 – 0.85
+   *   3. CWD language tag overlap (bonus +0.10, capped at 1.0)
+   *
+   * Skills with no tags and no description get a baseline score of 0.30 so
+   * they only surface when nothing more relevant exists.
+   */
+  private async scoreMdSkill(skill: MarkdownSkill, promptLower: string, cwdTags: Set<string>): Promise<number> {
+    const promptTokens = new Set(promptLower.split(/\s+/).filter(Boolean));
+    let score = 0;
+
+    // ── 1. Tag overlap ────────────────────────────────────────────────────────
+    if (skill.tags.length > 0) {
+      const tagsLower = skill.tags.map(t => t.toLowerCase());
+      const matched = tagsLower.filter(t => promptLower.includes(t) || promptTokens.has(t));
+      if (matched.length > 0) {
+        score = Math.max(score, Math.min(0.95, 0.70 + (matched.length / tagsLower.length) * 0.25));
+      }
+    }
+
+    // ── 2. Description word overlap ───────────────────────────────────────────
+    if (skill.description) {
+      const descWords = skill.description.toLowerCase().split(/\s+/).filter(Boolean);
+      const overlap = descWords.filter(w => promptTokens.has(w)).length;
+      if (overlap > 0) {
+        score = Math.max(score, Math.min(0.85, 0.50 + (overlap / descWords.length) * 0.35));
+      }
+    }
+
+    // Baseline for skills with no matchable metadata
+    if (score === 0) score = 0.30;
+
+    // ── 3. CWD language bonus ─────────────────────────────────────────────────
+    const skillTokens = new Set(skill.tags.map(t => t.toLowerCase()));
+    if ([...skillTokens].some(t => cwdTags.has(t))) {
+      score = Math.min(1.0, score + 0.10);
+    }
+
+    return score;
+  }
+
+  /**
+   * Returns the top-3 Markdown skills most relevant to `prompt`, ranked by
+   * relevance score.  Falls back to returning up to 3 skills by insertion
+   * order when no prompt is supplied (e.g. legacy callers).
+   *
+   * The rendered block mirrors the JSON-skills layout so the injected context
+   * is consistent.
+   */
+  async getMarkdownContext(prompt?: string): Promise<string> {
     await this.initialize();
     if (this.mdSkills.size === 0) return '';
 
+    const MAX_MD_SKILLS = 3;
+    let selected: MarkdownSkill[];
+
+    if (prompt) {
+      const promptLower = prompt.toLowerCase();
+      const cwdTags = await detectCwdLanguages();
+
+      const scored = await Promise.all(
+        Array.from(this.mdSkills.values()).map(async skill => ({
+          skill,
+          score: await this.scoreMdSkill(skill, promptLower, cwdTags),
+        }))
+      );
+
+      selected = scored
+        .sort((a, b) => b.score - a.score)
+        .slice(0, MAX_MD_SKILLS)
+        .map(({ skill }) => skill);
+    } else {
+      // Legacy / no-prompt path: take first N by insertion order
+      selected = Array.from(this.mdSkills.values()).slice(0, MAX_MD_SKILLS);
+    }
+
     const parts: string[] = ['## Skills\n'];
-    for (const skill of this.mdSkills.values()) {
+    for (const skill of selected) {
       parts.push(`### ${skill.name}${skill.description ? ` — ${skill.description}` : ''}`);
       parts.push(skill.content);
       parts.push('');
@@ -151,47 +298,93 @@ export class SkillManager {
 
   // ─── JSON skill methods (machine-learned) ──────────────────────────────────
 
+  /**
+   * Score every JSON skill against the task prompt AND the cwd's inferred
+   * language tags, then return the top-3 above `threshold`.
+   *
+   * Scoring layers (applied per skill, best match wins per trigger type):
+   *   1. Regex match          → base 0.90
+   *   2. Keyword overlap      → 0.70 – 0.95, proportional to fraction matched
+   *   3. Semantic word overlap → 0.50 – 0.85
+   *
+   * CWD bonus: if the skill's keywords/tags intersect the detected language
+   * tags from the working directory, the final score gets a +0.10 boost
+   * (capped at 1.0).  This lets "rust" skills float up automatically when
+   * Cargo.toml is present even if the prompt doesn't say "rust".
+   */
   async matchSkills(input: string, threshold = 0.6): Promise<SkillMatch[]> {
     await this.initialize();
-    const matches: SkillMatch[] = [];
+
     const inputLower = input.toLowerCase();
+    const cwdTags = await detectCwdLanguages();
+
+    // Collect the single best match per skill (avoid duplicate entries)
+    const bestPerSkill = new Map<string, SkillMatch>();
+
+    const consider = (candidate: SkillMatch) => {
+      const existing = bestPerSkill.get(candidate.skill.id);
+      if (!existing || candidate.confidence > existing.confidence) {
+        bestPerSkill.set(candidate.skill.id, candidate);
+      }
+    };
 
     for (const skill of this.jsonSkills.values()) {
+      // ── 1. Regex ──────────────────────────────────────────────────────────
       if (skill.pattern.regex) {
         for (const pattern of skill.pattern.regex) {
           try {
             if (new RegExp(pattern, 'i').test(input)) {
-              matches.push({ skill, confidence: 0.9, trigger: 'regex', matched: pattern });
+              consider({ skill, confidence: 0.9, trigger: 'regex', matched: pattern });
               break;
             }
-          } catch { /* bad regex */ }
+          } catch { /* skip bad regex */ }
         }
       }
 
+      // ── 2. Keyword overlap ────────────────────────────────────────────────
       if (skill.pattern.keywords) {
-        const matched = skill.pattern.keywords.filter(kw => inputLower.includes(kw.toLowerCase()));
+        const kwLower = skill.pattern.keywords.map(k => k.toLowerCase());
+        const matched = kwLower.filter(kw => inputLower.includes(kw));
         if (matched.length > 0) {
-          const confidence = Math.min(0.95, 0.7 + (matched.length / skill.pattern.keywords.length) * 0.25);
-          matches.push({ skill, confidence, trigger: 'keyword', matched: matched.join(', ') });
+          const confidence = Math.min(0.95, 0.7 + (matched.length / kwLower.length) * 0.25);
+          consider({ skill, confidence, trigger: 'keyword', matched: matched.join(', ') });
         }
       }
 
+      // ── 3. Semantic word overlap ──────────────────────────────────────────
       if (skill.pattern.semantic) {
         const semWords = skill.pattern.semantic.toLowerCase().split(/\s+/);
         const inWords = inputLower.split(/\s+/);
         const overlap = semWords.filter(w => inWords.includes(w)).length;
         if (overlap > 0) {
           const confidence = Math.min(0.85, 0.5 + (overlap / semWords.length) * 0.35);
-          if (confidence >= threshold) {
-            matches.push({ skill, confidence, trigger: 'semantic', matched: skill.pattern.semantic });
-          }
+          consider({ skill, confidence, trigger: 'semantic', matched: skill.pattern.semantic });
         }
       }
     }
 
-    return matches
+    // ── CWD language bonus ────────────────────────────────────────────────────
+    // Collect all keyword-like strings associated with each skill for tag
+    // comparison: pattern.keywords + metadata.tags.
+    for (const [id, match] of bestPerSkill) {
+      const skill = match.skill;
+      const skillTokens = new Set([
+        ...(skill.pattern.keywords ?? []).map(k => k.toLowerCase()),
+        ...(skill.metadata.tags ?? []).map(t => t.toLowerCase()),
+      ]);
+      const hasCwdOverlap = [...skillTokens].some(t => cwdTags.has(t));
+      if (hasCwdOverlap) {
+        bestPerSkill.set(id, {
+          ...match,
+          confidence: Math.min(1.0, match.confidence + 0.10),
+        });
+      }
+    }
+
+    return Array.from(bestPerSkill.values())
       .filter(m => m.confidence >= threshold)
-      .sort((a, b) => b.confidence - a.confidence);
+      .sort((a, b) => b.confidence - a.confidence)
+      .slice(0, 3);
   }
 
   async getAllJsonSkills(): Promise<Skill[]> {
