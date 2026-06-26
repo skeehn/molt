@@ -1,6 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import type { ToolResult } from '../providers/types.js';
-import * as renderer from '../tui/renderer.js';
 
 const MAX_OUTPUT = 50_000;
 const DEFAULT_TIMEOUT = 60_000;
@@ -139,16 +138,12 @@ export async function executeBash(
   const workdir = cwd || process.cwd();
   const session = getOrCreateShell(workdir);
 
-  renderer.toolStart('bash', input.command.slice(0, 120));
-
   const { output, exitCode } = await runInShell(
     session,
     input.command,
     timeoutMs,
     (_line) => {}, // streaming lines suppressed — show result once at end
   );
-
-  if (output) renderer.dim(`  ${output.split('\n').slice(0, 6).join('\n  ')}`);
 
   if (exitCode !== 0 && exitCode !== 124) {
     return {
