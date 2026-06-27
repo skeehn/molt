@@ -1,6 +1,89 @@
 # grain Plugin System
 
-grain's plugin system allows it to orchestrate external coding agents like **Claude Code**, **Codex**, **Aider**, and others. This makes grain a universal orchestrator that can route tasks to the best-suited agent.
+grain is a multi-agent orchestrator that can discover, route to, and coordinate with external coding agents.
+
+## Local Model Hosting with vLLM
+
+grain supports local model hosting via vLLM for fully private, self-hosted AI coding.
+
+### Setup
+
+1. **Install vLLM:**
+   ```bash
+   pip install vllm
+   ```
+
+2. **Start vLLM server:**
+   ```bash
+   # Basic
+   vllm serve meta-llama/Llama-3-70B-Instruct --port 8000
+   
+   # With GPU optimization
+   vllm serve meta-llama/Llama-3-70B-Instruct \
+     --port 8000 \
+     --tensor-parallel-size 2 \
+     --gpu-memory-utilization 0.9
+   
+   # With quantization
+   vllm serve TheBloke/Llama-3-70B-Instruct-AWQ \
+     --port 8000 \
+     --quantization awq
+   ```
+
+3. **Configure grain:**
+   ```json
+   {
+     "provider": "vllm",
+     "model": "meta-llama/Llama-3-70B-Instruct",
+     "vllm": {
+       "endpoint": "http://localhost:8000",
+       "apiKey": "optional-if-server-requires-it"
+     }
+   }
+   ```
+
+4. **Run grain:**
+   ```bash
+   grain "Refactor auth.py to use async/await"
+   ```
+
+### Recommended Models
+
+| Model | Size | Use Case | Hardware |
+|-------|------|----------|----------|
+| Llama-3-70B-Instruct | 70B | Full-featured coding | 2x A100 40GB |
+| Llama-3-8B-Instruct | 8B | Fast iteration, simple tasks | 1x RTX 3090 |
+| DeepSeek-Coder-33B | 33B | Code-specific tasks | 1x A100 40GB |
+| CodeLlama-34B | 34B | Legacy codebases | 1x A100 40GB |
+
+### Benefits
+
+✅ **100% Private** — No data leaves your machine  
+✅ **Zero API costs** — Run unlimited tasks  
+✅ **Custom models** — Fine-tune for your codebase  
+✅ **High throughput** — vLLM's PagedAttention is fast  
+
+### Remote vLLM
+
+You can also point grain at a remote vLLM server:
+
+```json
+{
+  "provider": "vllm",
+  "model": "meta-llama/Llama-3-70B-Instruct",
+  "vllm": {
+    "endpoint": "https://your-vllm-server.example.com",
+    "apiKey": "your-api-key"
+  }
+}
+```
+
+This is useful for:
+- Centralized inference for a team
+- GPU servers in data center while using grain on laptop
+- Cloud-hosted vLLM (Runpod, Lambda Labs, etc.)
+
+---
 
 ## Architecture
 

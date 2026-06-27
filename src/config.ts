@@ -12,6 +12,10 @@ export interface GrainConfig {
   engram_db: string;
   max_tokens: number;
   plugins?: PluginsConfig;
+  vllm?: {
+    endpoint?: string;
+    apiKey?: string;
+  };
 }
 
 const CONFIG_DIR  = join(homedir(), '.grain');
@@ -48,7 +52,7 @@ const DEFAULTS: GrainConfig = {
   },
 };
 
-export const VALID_PROVIDERS = ['bedrock', 'anthropic', 'openrouter', 'ollama'] as const;
+export const VALID_PROVIDERS = ['bedrock', 'anthropic', 'openrouter', 'ollama', 'vllm'] as const;
 
 // ─── .env loading ─────────────────────────────────────────────────────────────
 // Load ~/.grain/.env into process.env at startup.
