@@ -1,40 +1,41 @@
 {
-  "task": "Add --reflect flag to grain: self-reflection after task completion",
-  "created": "2026-06-26T23:56:27.994Z",
-  "updated": "2026-06-26T23:56:27.994Z",
+  "task": "Add 'grain config show' subcommand with formatted table output showing Provider, Plugins, MCP Servers, and Paths sections",
+  "created": "2026-06-27T01:46:08.494Z",
+  "updated": "2026-06-27T01:47:41.163Z",
   "steps": [
     {
-      "id": "loop",
-      "description": "Add reflect?: boolean to AgentOpts, implement runReflection() in loop.ts, call it after finishCalled",
-      "status": "pending",
-      "files": [
-        "src/agent/loop.ts"
-      ]
+      "id": "1",
+      "description": "Read current cli.ts to understand command structure",
+      "status": "done",
+      "notes": "Understood cli.ts structure - config handling is inline in handleConfig function around line 228"
     },
     {
-      "id": "orchestrator",
-      "description": "Add reflect to OrchestratorOpts and thread it into agentLoop call",
-      "status": "pending",
-      "files": [
-        "src/agent/orchestrator.tsx"
-      ]
+      "id": "2",
+      "description": "Read existing config-related code to understand config loading",
+      "status": "done",
+      "notes": "Config has provider, model, engram_db, max_tokens, plugins config, and vllm endpoint. Need to read plugins/types.ts for plugin structure"
     },
     {
-      "id": "cli",
-      "description": "Add reflect: boolean to ParsedArgs, parse --reflect flag, pass to orchestrate, add to help text",
-      "status": "pending",
-      "files": [
-        "src/cli.ts"
-      ]
+      "id": "3",
+      "description": "Read any existing commands in src/commands/ for patterns",
+      "status": "done",
+      "notes": "No src/commands/ dir yet - need to create it. Plugin system has claude-code and codex plugins with isInstalled/getVersion methods"
     },
     {
-      "id": "build",
-      "description": "Build and verify no TypeScript errors",
-      "status": "pending"
+      "id": "4",
+      "description": "Create src/commands/config.ts with show subcommand",
+      "status": "done",
+      "notes": "Created src/commands/config.ts with handleConfigShow function"
     },
     {
-      "id": "verify",
-      "description": "Smoke-test the flag wiring end to end",
+      "id": "5",
+      "description": "Update cli.ts to wire up the config command",
+      "status": "done",
+      "notes": "Updated cli.ts to import and call handleConfigShow, made handleConfig async"
+    },
+    {
+      "id": "6",
+      "description": "Test the command works correctly",
       "status": "pending"
     }
   ]

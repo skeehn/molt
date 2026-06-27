@@ -10,6 +10,7 @@ import { join } from 'path';
 import { homedir, platform } from 'os';
 import * as readline from 'readline';
 import { spawn, execSync } from 'child_process';
+import { handleConfigShow } from './commands/config.js';
 
 // ─── Load ~/.grain/.env before anything else ──────────────────────────────────
 loadGrainEnv();
@@ -225,40 +226,13 @@ async function handleUpdate(): Promise<void> {
 
 // ─── grain config ─────────────────────────────────────────────────────────────
 
-function handleConfig(sub?: string, key?: string, value?: string): void {
-  const config = loadConfig();
-  const keys = listEnvKeys();
-
+async function handleConfig(sub?: string, key?: string, value?: string): Promise<void> {
   if (!sub || sub === 'show') {
-    // Pretty table
-    const providerOk = VALID_PROVIDERS.includes(config.provider as any);
-    console.log(`\n${bold('grain config')}\n`);
-    console.log(`  Provider     ${providerOk ? c.green : c.yellow}${config.provider}${c.reset}`);
-    console.log(`  Model        ${config.model ?? dim('auto (smart routing)')}`);
-    console.log(`  engram DB    ${dim(config.engram_db)}`);
-    console.log(`  Max tokens   ${dim(String(config.max_tokens))}`);
-    console.log(`  Config dir   ${dim(getConfigDir())}`);
-
-    const envKeyNames = ['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'AWS_ACCESS_KEY_ID'];
-    const savedKeys = envKeyNames.filter(k => keys[k]);
-    if (savedKeys.length > 0) {
-      console.log();
-      for (const k of savedKeys) {
-        const v = keys[k];
-        const masked = v.slice(0, 8) + '...' + v.slice(-4);
-        console.log(`  ${k}  ${dim(masked)}`);
-      }
-    }
-
-    console.log();
-    console.log(`${dim('Commands:')}`);
-    console.log(`  grain config set provider <name>          ${dim('bedrock | anthropic | openrouter | ollama')}`);
-    console.log(`  grain config set model <id>               ${dim('override smart routing (optional)')}`);
-    console.log(`  grain config set key <KEY_NAME> <value>   ${dim('save API key to ~/.grain/.env')}`);
-    console.log(`  grain config reset                        ${dim('restore defaults')}`);
-    console.log();
+    await handleConfigShow();
     return;
   }
+
+  const config = loadConfig();
 
   if (sub === 'reset') {
     saveConfig({
@@ -862,7 +836,7 @@ async function main(): Promise<void> {
   if (parsed.command === 'engram')  { await handleEngram(parsed.engramSubcmd, parsed.engramArg); return; }
 
   if (parsed.command === 'config') {
-    handleConfig(parsed.configSubcmd, parsed.configKey, parsed.configValue);
+    await handleConfig(parsed.configSubcmd, parsed.configKey, parsed.configValue);
     return;
   }
 
