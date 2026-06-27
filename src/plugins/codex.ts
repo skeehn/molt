@@ -2,11 +2,23 @@
  * Codex Plugin
  * 
  * Integrates OpenAI's Codex CLI as an agent plugin.
- * Uses exec mode for one-shot tasks.
+ * Uses exec mode for one-shot tasks with proper JSONL parsing.
  */
 
 import { spawn } from "child_process";
 import type { AgentPlugin, AgentTask, AgentResult, AgentCapability } from "./types.ts";
+
+interface CodexEvent {
+  type: string;
+  [key: string]: any;
+}
+
+interface CodexUsage {
+  input_tokens: number;
+  cached_input_tokens?: number;
+  output_tokens: number;
+  reasoning_output_tokens?: number;
+}
 
 export class CodexPlugin implements AgentPlugin {
   name = "codex";
@@ -105,14 +117,23 @@ export class CodexPlugin implements AgentPlugin {
       proc.on("close", (code: number) => {
         const durationMs = Date.now() - startTime;
         
+        // Parse JSONL output
+        const parsed = this.parseJSONL(stdout);
+        
         resolve({
           success: code === 0,
-          output: stdout || stderr || `Codex exited with code ${code}`,
+          output: parsed.summary,
+          cost: parsed.cost,
           durationMs,
+          filesModified: parsed.filesModified,
           exitReason: code === 0 ? "completed" : "error",
           metadata: {
             exitCode: code,
-            rawStderr: stderr.slice(0, 1000), // Truncate
+            rawStderr: stderr.slice(0, 1000),
+            inputTokens: parsed.usage?.input_tokens,
+            outputTokens: parsed.usage?.output_tokens,
+            cachedTokens: parsed.usage?.cached_input_tokens,
+            threadId: parsed.threadId,
           },
         });
       });
@@ -127,5 +148,87 @@ export class CodexPlugin implements AgentPlugin {
         });
       });
     });
+  }
+
+  /**
+   * Parse JSONL output from codex --json
+   * 
+   * Event types:
+   * - thread.started: {thread_id}
+   * - turn.started: beginning of agent turn
+   * - item.completed: {item: {type, text?}} - agent messages, file edits, commands
+   * - turn.completed: {usage: {input_tokens, output_tokens, ...}}
+   */
+  private parseJSONL(jsonl: string): {
+    summary: string;
+    usage: CodexUsage | null;
+    cost: number | null;
+    filesModified: string[];
+    threadId: string | null;
+  } {
+    const lines = jsonl.trim().split('\n').filter(l => l.trim());
+    const events: CodexEvent[] = [];
+    
+    for (const line of lines) {
+      try {
+        const event = JSON.parse(line);
+        events.push(event);
+      } catch (err) {
+        // Skip malformed lines
+      }
+    }
+
+    // Extract key information
+    const threadStarted = events.find(e => e.type === 'thread.started');
+    const turnCompleted = events.find(e => e.type === 'turn.completed');
+    const itemsCompleted = events.filter(e => e.type === 'item.completed');
+
+    // Build summary from agent messages
+    const messages = itemsCompleted
+      .filter(e => e.item?.type === 'agent_message')
+      .map(e => e.item?.text)
+      .filter(Boolean);
+
+    // Extract file changes from file_edit items
+    const fileEdits = itemsCompleted
+      .filter(e => e.item?.type === 'file_edit')
+      .map(e => e.item?.path)
+      .filter(Boolean);
+
+    // Extract usage
+    const usage: CodexUsage | null = turnCompleted?.usage || null;
+
+    // Calculate cost (approximate: $0.003 per 1K input tokens, $0.015 per 1K output)
+    let cost: number | null = null;
+    if (usage) {
+      const inputCost = ((usage.input_tokens - (usage.cached_input_tokens || 0)) / 1000) * 0.003;
+      const cachedCost = ((usage.cached_input_tokens || 0) / 1000) * 0.0003; // 10x cheaper
+      const outputCost = (usage.output_tokens / 1000) * 0.015;
+      cost = inputCost + cachedCost + outputCost;
+    }
+
+    // Build human-readable summary
+    let summary = messages.join('\n\n');
+    
+    if (fileEdits.length > 0) {
+      summary += `\n\n📝 Modified files:\n${fileEdits.map(f => `  - ${f}`).join('\n')}`;
+    }
+    
+    if (usage) {
+      const totalTokens = usage.input_tokens + usage.output_tokens;
+      summary += `\n\n💰 Usage: ${totalTokens.toLocaleString()} tokens ($${cost?.toFixed(4) || '?'})`;
+    }
+
+    if (!summary) {
+      summary = "Codex completed (no output captured)";
+    }
+
+    return {
+      summary,
+      usage,
+      cost,
+      filesModified: fileEdits,
+      threadId: threadStarted?.thread_id || null,
+    };
   }
 }
