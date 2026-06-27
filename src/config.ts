@@ -2,6 +2,8 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 
+import type { PluginsConfig } from './plugins/types.js';
+
 export const GRAIN_VERSION = '0.2.0';
 
 export interface GrainConfig {
@@ -9,6 +11,7 @@ export interface GrainConfig {
   model: string | null;
   engram_db: string;
   max_tokens: number;
+  plugins?: PluginsConfig;
 }
 
 const CONFIG_DIR  = join(homedir(), '.grain');
@@ -20,6 +23,29 @@ const DEFAULTS: GrainConfig = {
   model:      null,
   engram_db:  '~/.engram/knowledge',
   max_tokens: 180000,
+  plugins: {
+    plugins: {
+      "claude-code": {
+        enabled: true,
+        defaultModel: "sonnet",
+        maxBudgetPerTask: 5.0,
+        preferredFor: ["code-review", "refactoring"],
+      },
+      "codex": {
+        enabled: true,
+        maxBudgetPerTask: 3.0,
+        preferredFor: ["feature-dev", "bug-fixing"],
+      },
+      "aider": {
+        enabled: false,
+      },
+    },
+    routing: {
+      prefer: "claude-code",
+      fallback: ["codex", "grain-native"],
+      routeByCapability: true,
+    },
+  },
 };
 
 export const VALID_PROVIDERS = ['bedrock', 'anthropic', 'openrouter', 'ollama'] as const;
