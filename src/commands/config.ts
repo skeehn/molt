@@ -11,8 +11,7 @@ import { existsSync, statSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { loadConfig, getConfigDir, VALID_PROVIDERS, listEnvKeys } from '../config.js';
-import { ClaudeCodePlugin } from '../plugins/claude-code.js';
-import { CodexPlugin } from '../plugins/codex.js';
+import { discoverPlugins } from '../plugins/discovery.js';
 
 // ─── ANSI helpers ─────────────────────────────────────────────────────────────
 const c = {
@@ -65,82 +64,6 @@ function row(label: string, value: string, indent = 2): string {
 
 function sectionEnd(): string {
   return `${c.cyan}${BOX.bottomLeft}${BOX.horizontal.repeat(60)}${c.reset}`;
-}
-
-// ─── Plugin discovery ─────────────────────────────────────────────────────────
-
-interface PluginInfo {
-  name: string;
-  installed: boolean;
-  version?: string;
-  enabled: boolean;
-}
-
-async function discoverPlugins(): Promise<PluginInfo[]> {
-  const config = loadConfig();
-  const pluginsConfig = config.plugins?.plugins ?? {};
-  
-  const plugins: PluginInfo[] = [];
-  
-  // Check claude-code
-  const claudeCode = new ClaudeCodePlugin();
-  try {
-    const installed = await claudeCode.isInstalled();
-    let version: string | undefined;
-    if (installed) {
-      try {
-        version = await claudeCode.getVersion();
-      } catch { /* ignore */ }
-    }
-    plugins.push({
-      name: 'claude-code',
-      installed,
-      version,
-      enabled: pluginsConfig['claude-code']?.enabled ?? true,
-    });
-  } catch {
-    plugins.push({ name: 'claude-code', installed: false, enabled: pluginsConfig['claude-code']?.enabled ?? true });
-  }
-  
-  // Check codex
-  const codex = new CodexPlugin();
-  try {
-    const installed = await codex.isInstalled();
-    let version: string | undefined;
-    if (installed) {
-      try {
-        version = await codex.getVersion();
-      } catch { /* ignore */ }
-    }
-    plugins.push({
-      name: 'codex',
-      installed,
-      version,
-      enabled: pluginsConfig['codex']?.enabled ?? true,
-    });
-  } catch {
-    plugins.push({ name: 'codex', installed: false, enabled: pluginsConfig['codex']?.enabled ?? true });
-  }
-  
-  // Check aider
-  try {
-    const { execSync } = await import('child_process');
-    execSync('which aider', { stdio: 'ignore' });
-    let version: string | undefined;
-    try {
-      version = execSync('aider --version', { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    } catch { /* ignore */ }
-    plugins.push({
-      name: 'aider',
-      installed: true,
-      version,
-      enabled: pluginsConfig['aider']?.enabled ?? false,
-    });
-  } catch {
-    plugins.push({ name: 'aider', installed: false, enabled: pluginsConfig['aider']?.enabled ?? false });
-  }
-  
-  return plugins;
 }
 
 // ─── Main show command ────────────────────────────────────────────────────────
@@ -202,7 +125,7 @@ export async function handleConfigShow(): Promise<void> {
   // ─── Plugins Section ──────────────────────────────────────────────────────
   console.log(sectionHeader('Plugins'));
   
-  const plugins = await discoverPlugins();
+  const plugins = await discoverPlugins(config.plugins?.plugins ?? {});
   
   if (plugins.length === 0) {
     console.log(row('', dim('No plugins configured')));

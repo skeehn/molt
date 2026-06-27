@@ -11,6 +11,7 @@ import { homedir, platform } from 'os';
 import * as readline from 'readline';
 import { spawn, execSync } from 'child_process';
 import { handleConfigShow } from './commands/config.js';
+import { discoverPlugins } from './plugins/discovery.js';
 
 // ─── Load ~/.grain/.env before anything else ──────────────────────────────────
 loadGrainEnv();
@@ -394,6 +395,17 @@ async function handleStatus(): Promise<void> {
     } catch {
       console.log(`${warn} ollama  ${dim('(localhost:11434 not responding — is Ollama running?)')}`);
     }
+  }
+
+  // Plugins
+  {
+    const plugins = await discoverPlugins(config.plugins?.plugins ?? {});
+    const installed = plugins.filter(p => p.installed);
+    const count = installed.length;
+    const names = installed.map(p => `${ok} ${p.name}`).join('  ');
+    const notInstalled = plugins.filter(p => !p.installed).map(p => `${dim(p.name)}`).join('  ');
+    const parts = [names, notInstalled].filter(Boolean).join('  ');
+    console.log(`  ${bold('Plugins')}   ${c.cyan}${count}${c.reset} installed${count > 0 ? `  ${parts}` : `  ${dim('none found')}`}`);
   }
 
   // Version + update hint

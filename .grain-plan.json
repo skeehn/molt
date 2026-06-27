@@ -1,41 +1,38 @@
 {
-  "task": "Add 'grain config show' subcommand with formatted table output showing Provider, Plugins, MCP Servers, and Paths sections",
-  "created": "2026-06-27T01:46:08.494Z",
-  "updated": "2026-06-27T01:47:41.163Z",
+  "task": "Enhance 'grain status' command to show plugin status including installed agents",
+  "created": "2026-06-27T01:54:39.493Z",
+  "updated": "2026-06-27T01:54:50.952Z",
   "steps": [
     {
       "id": "1",
-      "description": "Read current cli.ts to understand command structure",
+      "description": "Understand current status command implementation and plugin discovery logic",
       "status": "done",
-      "notes": "Understood cli.ts structure - config handling is inline in handleConfig function around line 228"
+      "files": [
+        "src/commands/status.ts",
+        "src/commands/config.ts",
+        "src/plugins/types.ts"
+      ],
+      "notes": "Found plugin discovery logic in config.ts using ClaudeCodePlugin, CodexPlugin, and aider shell detection. Current status command is in cli.ts lines 308-403 and shows config, engram, skills, git repo, sessions, provider, version.\""
     },
     {
       "id": "2",
-      "description": "Read existing config-related code to understand config loading",
-      "status": "done",
-      "notes": "Config has provider, model, engram_db, max_tokens, plugins config, and vllm endpoint. Need to read plugins/types.ts for plugin structure"
+      "description": "Extract plugin discovery logic into a reusable module",
+      "status": "pending",
+      "files": [
+        "src/plugins/discovery.ts"
+      ]
     },
     {
       "id": "3",
-      "description": "Read any existing commands in src/commands/ for patterns",
-      "status": "done",
-      "notes": "No src/commands/ dir yet - need to create it. Plugin system has claude-code and codex plugins with isInstalled/getVersion methods"
+      "description": "Update status command to include plugins section with agent versions",
+      "status": "pending",
+      "files": [
+        "src/commands/status.ts"
+      ]
     },
     {
       "id": "4",
-      "description": "Create src/commands/config.ts with show subcommand",
-      "status": "done",
-      "notes": "Created src/commands/config.ts with handleConfigShow function"
-    },
-    {
-      "id": "5",
-      "description": "Update cli.ts to wire up the config command",
-      "status": "done",
-      "notes": "Updated cli.ts to import and call handleConfigShow, made handleConfig async"
-    },
-    {
-      "id": "6",
-      "description": "Test the command works correctly",
+      "description": "Test the enhanced status command",
       "status": "pending"
     }
   ]
