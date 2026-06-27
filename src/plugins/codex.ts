@@ -74,7 +74,8 @@ export class CodexPlugin implements AgentPlugin {
   private async executeExecMode(task: AgentTask): Promise<AgentResult> {
     const args = [
       "exec",
-      "--full-auto",  // Sandboxed but auto-approves file changes
+      "--json",  // Output JSONL events for structured parsing
+      "--skip-git-repo-check",  // Allow running outside git repos
       task.prompt,
     ];
 
