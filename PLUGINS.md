@@ -85,7 +85,122 @@ This is useful for:
 
 ---
 
-## Architecture
+---
+
+## Multi-Agent Plugins
+
+grain's plugin system allows it to orchestrate external coding agents like **Claude Code**, **Codex**, **Aider**, and others. This makes grain a universal orchestrator that can route tasks to the best-suited agent.
+
+### Available Plugins
+
+**Built-in:**
+- `claude-code` — Uses `claude-code -p` in print mode for code review and refactoring
+- `codex` — Uses `codex exec` for feature development and rapid prototyping
+
+**Coming Soon:**
+- `aider` — Multi-file edits with awareness
+- `grain-native` — Fall back to grain's own tools
+
+---
+
+## Model Context Protocol (MCP)
+
+grain has native MCP support for connecting to external tools and services.
+
+### Computer Use (Desktop Automation)
+
+Connect grain to Anthropic's Computer Use MCP server for GUI automation:
+
+**1. Configure MCP server in ~/.grain/config.json:**
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "computer-use": {
+        "command": "npx",
+        "args": ["-y", "@anthropic-ai/mcp-server-computer-use"]
+      }
+    }
+  }
+}
+```
+
+**2. Use naturally:**
+
+```bash
+# Take screenshots
+grain "Take a screenshot of my desktop and describe what's on it"
+
+# Control applications
+grain "Open Safari and navigate to github.com/skeehn/grain"
+
+# Automate workflows
+grain "Find the Submit button on this form and click it"
+
+# Test UI
+grain "Verify the login button appears after entering credentials"
+```
+
+**Available Tools:**
+- `computer_screenshot` — Capture screen or window
+- `computer_mouse_move` — Move cursor to coordinates
+- `computer_click` — Click at location
+- `computer_type` — Type text
+- `computer_execute_command` — Run shell commands
+
+### Other MCP Servers
+
+grain works with any MCP-compatible server. Popular options:
+
+**Filesystem:**
+```json
+{
+  "mcp": {
+    "servers": {
+      "filesystem": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"]
+      }
+    }
+  }
+}
+```
+
+**Git:**
+```json
+{
+  "mcp": {
+    "servers": {
+      "git": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-git"]
+      }
+    }
+  }
+}
+```
+
+**GitHub:**
+```json
+{
+  "mcp": {
+    "servers": {
+      "github": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": {
+          "GITHUB_TOKEN": "your-token-here"
+        }
+      }
+    }
+  }
+}
+```
+
+**Custom MCP servers** — Build your own following the [MCP specification](https://modelcontextprotocol.io).
+
+---
 
 The plugin system consists of:
 
