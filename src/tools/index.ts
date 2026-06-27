@@ -14,32 +14,74 @@ import { testRunnerTool, executeTestRunner } from './test-runner.js';
 import { testFixLoopTool, executeTestFixLoop } from './test-fix-loop.js';
 import { planTool, executePlan } from './plan.js';
 import { repoMapTool, executeRepoMap } from './repo-map.js';
+import { PluginRegistry } from '../plugins/registry.js';
+import { ClaudeCodePlugin } from '../plugins/claude-code.js';
+import { CodexPlugin } from '../plugins/codex.js';
+import { createSpawnAgentTool } from './spawn-agent.js';
+import { loadConfig } from '../config.js';
 
 // Tool execution context — set once at agent loop start
 let _toolCwd: string = process.cwd();
 export function setToolCwd(cwd: string) { _toolCwd = cwd; }
 export { destroyShell };
 
-export const TOOLS: Tool[] = [
-  // Core (10) — essential for any coding task
-  bashTool,        // Run shell commands
-  readTool,        // Read files
-  writeTool,       // Write files (with syntax check)
-  patchTool,       // Targeted edits
-  grepTool,        // Search content
-  workspaceScanTool, // List files/structure
-  gitTool,         // Git operations
-  testRunnerTool,  // Run tests
-  finishTool,      // Signal completion
-  repoMapTool,     // Understand codebase structure
+// Plugin system initialization
+let _pluginRegistry: PluginRegistry | null = null;
+let _spawnAgentTool: Tool | null = null;
 
-  // Power (5) — for complex tasks
-  multiEditTool,   // Batch edits across files
-  engramTool,      // Persistent memory
-  delegateTool,    // Spawn sub-agents
-  testFixLoopTool, // Run tests + return structured failures for fix loop
-  planTool,        // Read/write .grain-plan.json — survives context compaction
-];
+function getPluginRegistry(): PluginRegistry {
+  if (!_pluginRegistry) {
+    const config = loadConfig();
+    const pluginsConfig = config.plugins || {
+      plugins: {},
+      routing: { prefer: "grain-native", fallback: [], routeByCapability: false },
+    };
+    
+    _pluginRegistry = new PluginRegistry(pluginsConfig);
+    
+    // Register available plugins
+    _pluginRegistry.register(new ClaudeCodePlugin());
+    _pluginRegistry.register(new CodexPlugin());
+  }
+  return _pluginRegistry;
+}
+
+function getSpawnAgentTool(): Tool {
+  if (!_spawnAgentTool) {
+    const registry = getPluginRegistry();
+    _spawnAgentTool = createSpawnAgentTool(registry);
+  }
+  return _spawnAgentTool;
+}
+
+// Lazy initialization wrapper to defer plugin loading until first use
+function getLazyTools(): Tool[] {
+  const tools: Tool[] = [
+    // Core (10) — essential for any coding task
+    bashTool,        // Run shell commands
+    readTool,        // Read files
+    writeTool,       // Write files (with syntax check)
+    patchTool,       // Targeted edits
+    grepTool,        // Search content
+    workspaceScanTool, // List files/structure
+    gitTool,         // Git operations
+    testRunnerTool,  // Run tests
+    finishTool,      // Signal completion
+    repoMapTool,     // Understand codebase structure
+
+    // Power (6) — for complex tasks
+    multiEditTool,   // Batch edits across files
+    engramTool,      // Persistent memory
+    delegateTool,    // Spawn sub-agents
+    testFixLoopTool, // Run tests + return structured failures for fix loop
+    planTool,        // Read/write .grain-plan.json — survives context compaction
+    getSpawnAgentTool(), // Multi-agent orchestration (plugins)
+  ];
+  return tools;
+}
+
+// Export TOOLS as a getter to ensure lazy init
+export const TOOLS: Tool[] = getLazyTools();
 
 const executors: Record<string, (input: any) => Promise<ToolResult>> = {
   bash: (input: any) => executeBash(input, _toolCwd),
@@ -57,6 +99,10 @@ const executors: Record<string, (input: any) => Promise<ToolResult>> = {
   engram: executeEngram,
   delegate: executeDelegate,
   finish: (input: any) => executeFinish(input, _toolCwd),
+  spawn_agent: async (input: any) => {
+    const tool = getSpawnAgentTool();
+    return await tool.execute(input);
+  },
 };
 
 export async function executeTool(name: string, input: any): Promise<ToolResult> {
