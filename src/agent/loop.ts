@@ -21,9 +21,111 @@ export interface AgentOpts {
   autoApprove?: boolean;
   concise?: boolean;
   maxTurns?: number;  // override default MAX_TURNS (useful for benchmarking)
+  reflect?: boolean;  // post-task self-reflection: store learnings + print summary
 }
 
 const MAX_TURNS = 30; // Safety limit to prevent infinite loops
+
+// ── Reflection ────────────────────────────────────────────────────────────────
+// Called after a successful finish. Makes one focused LLM call to surface
+// 2-3 learnings from this run, stores them in engram, and prints them.
+
+interface ReflectionContext {
+  task: string;
+  outcome: string;
+  toolsUsed: string[];
+  filesChanged: string[];
+  errors: string[];
+}
+
+async function runReflection(
+  provider: ReturnType<typeof getProvider>,
+  ctx: ReflectionContext,
+): Promise<void> {
+  const { task, outcome, toolsUsed, filesChanged, errors } = ctx;
+
+  const toolSummary  = toolsUsed.length  ? toolsUsed.join(' → ')  : 'none';
+  const fileSummary  = filesChanged.length ? filesChanged.join(', ') : 'none';
+  const errorSummary = errors.length      ? errors.join('; ')       : 'none';
+
+  const reflectionPrompt = [
+    'You just completed this task as an AI coding agent.',
+    '',
+    `Task: ${task.slice(0, 300)}`,
+    `Outcome: ${outcome}`,
+    `Tool sequence: ${toolSummary}`,
+    `Files changed: ${fileSummary}`,
+    `Errors encountered: ${errorSummary}`,
+    '',
+    'Produce EXACTLY 2-3 concise learnings from this run. Each learning must be:',
+    '  - One sentence, ≤ 25 words',
+    '  - Actionable ("Always X", "Prefer Y over Z", "When A, do B")',
+    '  - About technique, approach, or pitfalls — NOT about the specific task content',
+    '',
+    'Respond with a JSON object (no markdown fences):',
+    '{"learnings": ["...", "...", "..."]}',
+  ].join('\n');
+
+  const messages: Message[] = [
+    { role: 'user', content: [{ type: 'text', text: reflectionPrompt }] },
+  ];
+
+  let raw = '';
+  try {
+    const spin = renderer.spinner('Reflecting...');
+    let stopped = false;
+    for await (const event of provider.stream(messages, 'You are a concise technical learning extractor.', [])) {
+      if (event.type === 'text_delta') {
+        if (!stopped) { spin.stop(); stopped = true; }
+        raw += event.text;
+      }
+    }
+    if (!stopped) spin.stop();
+  } catch (e: any) {
+    // Reflection is best-effort — never block the user
+    renderer.dim(`  (reflection skipped: ${e?.message || e})`);
+    return;
+  }
+
+  // Parse learnings
+  let learnings: string[] = [];
+  try {
+    // Strip markdown fences if model ignores instructions
+    const cleaned = raw.replace(/^```[a-z]*\n?/m, '').replace(/```$/m, '').trim();
+    const parsed = JSON.parse(cleaned);
+    if (Array.isArray(parsed.learnings)) {
+      learnings = parsed.learnings.slice(0, 3).filter((l: unknown) => typeof l === 'string' && l.trim());
+    }
+  } catch {
+    // Fallback: extract bullet-like lines if JSON parse fails
+    learnings = raw
+      .split('\n')
+      .map(l => l.replace(/^[-•*\d.]\s*/, '').trim())
+      .filter(l => l.length > 20 && l.length < 200)
+      .slice(0, 3);
+  }
+
+  if (learnings.length === 0) return;
+
+  // Store each learning in engram
+  const tags = ['reflection', 'grain-task'];
+  if (filesChanged.some(f => f.endsWith('.rs')))               tags.push('rust');
+  if (filesChanged.some(f => f.endsWith('.ts') || f.endsWith('.js'))) tags.push('typescript');
+  if (filesChanged.some(f => f.endsWith('.go')))               tags.push('go');
+  if (filesChanged.some(f => f.endsWith('.py')))               tags.push('python');
+
+  await Promise.all(
+    learnings.map(l => engramStore(l, tags).catch(() => { /* best-effort */ })),
+  );
+
+  // Print Reflection section
+  renderer.newLine();
+  renderer.info('Reflection:');
+  for (const learning of learnings) {
+    renderer.dim(`  • ${learning}`);
+  }
+  renderer.newLine();
+}
 
 export async function agentLoop(opts: AgentOpts): Promise<void> {
   const config = loadConfig();
@@ -95,6 +197,9 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
   // Main agent loop - fluid execution
   let turnCount = 0;
   const turnLimit = opts.maxTurns ?? MAX_TURNS;
+  const sessionErrors: string[] = []; // collected for reflection
+  const allToolsUsed: string[] = [];   // accumulated across all turns for reflection
+  const allFilesChanged: string[] = []; // accumulated across all turns for reflection
 
   while (turnCount < turnLimit) {
     turnCount++;
@@ -330,6 +435,12 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
         // Execute the tool
         const result = await executeTool(block.name, block.input);
         trackToolCall(block.name, block.input, result);
+        // Accumulate for reflection
+        allToolsUsed.push(block.name);
+        if (block.name === 'write' || block.name === 'patch' || block.name === 'multi_edit') {
+          const p = (block.input as any)?.path as string | undefined;
+          if (p) allFilesChanged.push(p);
+        }
 
         const resultContent = typeof result.content === 'string'
           ? result.content
@@ -340,6 +451,10 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
           ? resultContent.slice(0, 500) + `\n... (${resultContent.length} chars total)`
           : resultContent;
         renderer.result(displayContent, result.is_error);
+
+        if (result.is_error) {
+          sessionErrors.push(resultContent.slice(0, 120));
+        }
 
         toolResults.push({
           type: 'tool_result',
@@ -358,9 +473,32 @@ export async function agentLoop(opts: AgentOpts): Promise<void> {
         addMessage(sessionId, 'user', toolResults);
       }
 
+      // Implicit finish: pure-text response with no tool calls = task done
+      process.stderr.write(`[dbg2] turn=${turnCount} finishCalled=${finishCalled} toolResults=${toolResults.length} assistantBlocks=${assistantBlocks.length}\n`);
+      if (!finishCalled && toolResults.length === 0) {
+        // Treat a bare text response as an implicit finish so --reflect fires
+        // and loops don't spin on pure-text completions
+        finishCalled = true;
+      }
+
       // If finish was called, handle exit or next input
       if (finishCalled) {
         destroyShell(); // clean up persistent bash session
+
+        // ── Reflection step ───────────────────────────────────────────────────
+        process.stderr.write(`[dbg] reflect=${opts.reflect} tools=${allToolsUsed.length} files=${allFilesChanged.length}\n`);
+        if (opts.reflect) {
+          const finishBlock = assistantBlocks.find((b: any) => b.type === 'tool_use' && b.name === 'finish') as any;
+          await runReflection(provider, {
+            task:         opts.prompt || 'interactive task',
+            outcome:      finishBlock?.input?.result || finishBlock?.input?.message || 'Task complete.',
+            toolsUsed:    [...new Set(allToolsUsed)],
+            filesChanged: [...new Set(allFilesChanged)],
+            errors:       [...new Set(sessionErrors)],
+          });
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         if (opts.oneShot) return;
 
         // Non-TTY (subprocess/CI): treat as one-shot

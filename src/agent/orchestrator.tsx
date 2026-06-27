@@ -8,6 +8,7 @@ export interface OrchestratorOpts {
   model?: string;
   provider?: string;
   maxTurns?: number;
+  reflect?: boolean;
 }
 
 export async function orchestrate(opts: OrchestratorOpts): Promise<void> {
@@ -15,13 +16,14 @@ export async function orchestrate(opts: OrchestratorOpts): Promise<void> {
   // Ink TUI will come in Phase 1B after we verify basic functionality
   
   await agentLoop({
-    prompt: opts.prompt,
-    resume: false,
-    model: opts.model,
-    provider: opts.provider,
-    oneShot: !!opts.prompt,
+    prompt:      opts.prompt,
+    resume:      false,
+    model:       opts.model,
+    provider:    opts.provider,
+    oneShot:     !!opts.prompt,
     autoApprove: opts.autoApprove,
-    concise: opts.concise,
-    maxTurns: opts.maxTurns,
+    concise:     opts.concise,
+    maxTurns:    opts.maxTurns,
+    reflect:     opts.reflect,
   });
 }

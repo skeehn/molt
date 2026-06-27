@@ -1,0 +1,41 @@
+{
+  "task": "Add --reflect flag to grain: self-reflection after task completion",
+  "created": "2026-06-26T23:56:27.994Z",
+  "updated": "2026-06-26T23:56:27.994Z",
+  "steps": [
+    {
+      "id": "loop",
+      "description": "Add reflect?: boolean to AgentOpts, implement runReflection() in loop.ts, call it after finishCalled",
+      "status": "pending",
+      "files": [
+        "src/agent/loop.ts"
+      ]
+    },
+    {
+      "id": "orchestrator",
+      "description": "Add reflect to OrchestratorOpts and thread it into agentLoop call",
+      "status": "pending",
+      "files": [
+        "src/agent/orchestrator.tsx"
+      ]
+    },
+    {
+      "id": "cli",
+      "description": "Add reflect: boolean to ParsedArgs, parse --reflect flag, pass to orchestrate, add to help text",
+      "status": "pending",
+      "files": [
+        "src/cli.ts"
+      ]
+    },
+    {
+      "id": "build",
+      "description": "Build and verify no TypeScript errors",
+      "status": "pending"
+    },
+    {
+      "id": "verify",
+      "description": "Smoke-test the flag wiring end to end",
+      "status": "pending"
+    }
+  ]
+}

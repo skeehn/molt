@@ -50,11 +50,12 @@ interface ParsedArgs {
   provider?: string;
   maxTurns?: number;
   tbBridge: boolean;  // TerminalBench bridge mode
+  reflect: boolean;   // post-task self-reflection + engram store
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
   const args = argv.slice(2);
-  const result: ParsedArgs = { autoApprove: false, concise: false, tbBridge: false };
+  const result: ParsedArgs = { autoApprove: false, concise: false, tbBridge: false, reflect: false };
 
   let i = 0;
   while (i < args.length) {
@@ -121,6 +122,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     else if (arg === '--provider')                   { result.provider = args[++i]; }
     else if (arg === '--max-turns')                  { result.maxTurns = parseInt(args[++i], 10); }
     else if (arg === '--tb-bridge')                  { result.tbBridge = true; }
+    else if (arg === '--reflect')                    { result.reflect = true; }
     else if (!arg.startsWith('-') && !result.prompt) {
       result.prompt = args.slice(i).join(' ');
       break;
@@ -884,6 +886,7 @@ async function main(): Promise<void> {
       model:       parsed.model,
       provider:    parsed.provider,
       maxTurns:    parsed.maxTurns,
+      reflect:     parsed.reflect,
     });
 
     // Signal done to TB bridge
